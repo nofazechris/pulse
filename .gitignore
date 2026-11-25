@@ -1,0 +1,13 @@
+node_modules/
+dist/
+*.ehpk
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+.vite/
+coverage/
+# Neon / Drizzle local artefacts that may embed credentials
+drizzle/meta/_journal.json.bak
+!.env.*.example

@@ -1,0 +1,38 @@
+{
+  "name": "pulse",
+  "version": "0.0.0",
+  "private": true,
+  "description": "PULSE - voice-first financial intelligence copilot for Even Realities G2. Heads Up Hackathon 2026, track: Exchanges & Stocks.",
+  "type": "module",
+  "engines": {
+    "node": "^22.13.0 || ^24.0.0"
+  },
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "dev:api": "npm run dev -w @pulse/api",
+    "dev:glasses": "npm run dev -w @pulse/glasses",
+    "simulator": "evenhub-simulator http://localhost:5173",
+    "simulator:auto": "evenhub-simulator http://localhost:5173 --automation-port 9898",
+    "build": "npm run build -w @pulse/glasses && npm run typecheck -w @pulse/api",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "vitest run",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "db:generate": "npm run db:generate -w @pulse/api",
+    "db:migrate": "npm run db:migrate -w @pulse/api",
+    "db:studio": "npm run db:studio -w @pulse/api",
+    "db:check": "npm run db:check -w @pulse/api",
+    "pack:ehpk": "npm run build && evenhub pack apps/glasses/app.json apps/glasses/dist -o pulse.ehpk",
+    "db:latency": "npm run db:latency -w @pulse/api"
+  },
+  "devDependencies": {
+    "@evenrealities/evenhub-cli": "0.2.0",
+    "@evenrealities/evenhub-simulator": "0.9.5",
+    "@types/node": "24.19.2",
+    "typescript": "5.9.3",
+    "vitest": "5.1.1"
+  }
+}
