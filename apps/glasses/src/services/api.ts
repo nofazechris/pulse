@@ -1,8 +1,9 @@
 import { z } from 'zod';
 import {
   agentReplySchema, agentSessionSchema, apiErrorSchema, apiSuccess, authSessionSchema, diagnosticsSchema, executeResultSchema,
-  healthSchema, marketStatsSchema, memorySchema, portfolioSchema, sessionInfoSchema, startSessionResultSchema, tradeProposalSchema,
-  transcriptionSchema, watchlistSchema,
+  healthSchema, marketStatsSchema, memorySchema, portfolioSchema, sessionInfoSchema, startSessionResultSchema, tradeProposalSchema, exchangeOrderSchema, type ExchangeOrderDto,
+  transcriptionSchema, watchlistSchema, planCheckSchema, tradePlanSchema,
+  type PlanCheck, type TradePlan,
   type AgentReply, type AuthSession, type Diagnostics, type ExecuteResult, type Health, type MarketStats, type Memory,
   type Portfolio, type TradeProposal, type Watchlist,
 } from '@pulse/shared';
@@ -27,6 +28,9 @@ export interface ApiClientOptions {
 }
 
 const uuid = () => (globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`);
+
+/** What the app needs from its backend: the real client, or the in-app practice backend. */
+export type PulseApi = Pick<ApiClient, keyof ApiClient>;
 
 /** Typed API client. Every response is validated with the shared zod contracts before use. */
 export class ApiClient {
@@ -118,7 +122,12 @@ export class ApiClient {
   execute = (id: string, idempotencyKey: string): Promise<ExecuteResult> =>
     this.request(executeResultSchema, 'POST', `/trades/proposals/${id}/execute`, { headers: { 'idempotency-key': idempotencyKey }, timeoutMs: 60_000 });
   proposal = (id: string): Promise<TradeProposal> => this.request(tradeProposalSchema, 'GET', `/trades/proposals/${id}`);
+  /** Only ever called after the wearer confirms on the lens, for the exact order shown. */
+  cancelOrder = (orderId: string): Promise<ExchangeOrderDto> =>
+    this.request(exchangeOrderSchema, 'POST', `/trades/orders/${orderId}/cancel`, { timeoutMs: 60_000 });
 
+  plans = (): Promise<TradePlan[]> => this.request(z.array(tradePlanSchema), 'GET', '/plans');
+  checkPlans = (sessionId: string): Promise<PlanCheck> => this.request(planCheckSchema, 'POST', '/plans/check', { body: { sessionId } });
   demoReset = () => this.request(z.object({ proposalsClosed: z.number(), sessionsRemoved: z.number(), watchlistReset: z.boolean() }), 'POST', '/demo/reset');
   diagnostics = (): Promise<Diagnostics> => this.request(diagnosticsSchema, 'GET', '/diagnostics');
   memories = (): Promise<Memory[]> => this.request(z.array(memorySchema), 'GET', '/memory');

@@ -1,4 +1,4 @@
-import type { AgentReply, Intent, TradeProposal } from '@pulse/shared';
+import { dec, type AgentReply, type Intent, type TradeProposal } from '@pulse/shared';
 import { AppError } from '../../utils/errors';
 import type { AuditService } from '../../security/audit';
 import { parseIntent, type ParsedParams } from '../ai/intent-parser';
@@ -12,6 +12,8 @@ import type { PortfolioService } from '../portfolio/service';
 import type { AgentSessionService } from '../sessions/agent-sessions';
 import { toSessionDto } from '../sessions/agent-sessions';
 import type { TradingService } from '../trading/service';
+import { PlanService } from '../trading/plans';
+import { outcomeWord } from '../trading/state-machine';
 import { money, pct, price, qty } from './format';
 
 export interface AgentDeps {
@@ -19,6 +21,7 @@ export interface AgentDeps {
   portfolio: PortfolioService;
   watchlist: WatchlistService;
   trading: TradingService;
+  plans: PlanService;
   sessions: AgentSessionService;
   memory: MemoryService;
   ai: AIProvider;
@@ -27,10 +30,9 @@ export interface AgentDeps {
   log?: { warn: (o: object, m?: string) => void };
 }
 
-const HELP =
-  'Try: "start my trading session", "show my portfolio", "price of Bitcoin", "how is Ether performing", "add SOL to my watchlist", "buy 20 USDT of BTC", then "approve" or "reject". Remember things with "remember that ...".';
+const HELP = 'Try: "show my portfolio", "buy 20 USDT of BTC", "sell half my SOL", "alert me if Bitcoin drops 2 percent", "show my open orders" or "how is my session".';
 
-const NO_ADVICE = 'PULSE does not give financial advice. Here are verified facts only.';
+const NO_ADVICE = 'No financial advice. Verified facts only.';
 
 const reply = (r: Partial<AgentReply> & Pick<AgentReply, 'intent' | 'response'>): AgentReply => ({
   sections: [], evidence: [], requiresClarification: false, source: 'deterministic', ...r,
@@ -44,7 +46,8 @@ export class AgentService {
     const session = await this.d.sessions.create(userId);
     this.d.audit.fire({ userId, sessionId: session.id, eventType: 'session.started', resourceType: 'agent_session', resourceId: session.id });
     const greeting = await this.greeting(userId);
-    await this.d.sessions.addMessage(session.id, 'assistant', greeting.response, 'START_SESSION');
+    const baseline = (greeting.data as { baselineUsdt?: string } | undefined)?.baselineUsdt;
+    await this.d.sessions.addMessage(session.id, 'assistant', greeting.response, 'START_SESSION', baseline ? { baselineUsdt: baseline } : {});
     return { session: toSessionDto(session), greeting };
   }
 
@@ -59,9 +62,11 @@ export class AgentService {
     const sections: AgentReply['sections'] = [];
     const evidence: AgentReply['evidence'] = [];
     const parts: string[] = [];
+    let baselineUsdt: string | undefined;
     try {
       const p = await this.d.portfolio.getPortfolio();
-      const line = `Portfolio about ${money(p.totalValueUsdt)} USDT across ${p.coverage.priced} priced assets (testnet)${p.change24hPercent ? `, ${pct(p.change24hPercent)} over 24h` : ''}.`;
+      baselineUsdt = p.totalValueUsdt;
+      const line = `Portfolio ~${money(p.totalValueUsdt)} USDT${p.change24hPercent ? `, 24h ${pct(p.change24hPercent)}` : ''}.`;
       sections.push({ label: 'FACT', text: line });
       evidence.push({ type: 'portfolio', reference: 'portfolio:testnet', value: p.totalValueUsdt, timestamp: p.timestamp });
       parts.push(line);
@@ -79,15 +84,16 @@ export class AgentService {
       parts.push(t);
     }
     const [last, mems, prefs] = await Promise.all([this.d.sessions.lastEnded(userId), this.d.memory.retrieve(userId, 'preferences goals', 3), this.d.memory.preferences(userId)]);
-    if (last?.summary) sections.push({ label: 'INFO', text: `Last session: ${last.summary}` });
+    if (last?.summary) sections.push({ label: 'INFO', text: `Last time: ${last.summary.split(' Assets:')[0]!.replace(/^Trades: /, '')}` });
     if (mems.length) sections.push({ label: 'INFO', text: `I remember: ${mems.map((m) => m.content).join('; ')}` });
     const tail = last || mems.length ? 'Welcome back. ' : '';
     // Remembered context first: the glasses show only ~6 lines, and this is what makes a returning session feel personal.
-    const remembered = sections.filter((s) => s.label === 'INFO' && /^(I remember|Last session)/.test(s.text));
+    const remembered = sections.filter((s) => s.label === 'INFO' && /^(I remember|Last time)/.test(s.text));
+    remembered.sort((a, b) => Number(b.text.startsWith('I remember')) - Number(a.text.startsWith('I remember')));
     const ordered = [...remembered, ...sections.filter((s) => !remembered.includes(s))];
     return reply({
       intent: 'START_SESSION', response: `${tail}Your session is ready. ${parts.join(' ')} What would you like to review?`.slice(0, 400),
-      sections: ordered, evidence, uiAction: { type: 'NAVIGATE', screen: 'home' }, data: { mode: this.d.mode, memoriesUsed: mems.length, preferences: prefs },
+      sections: ordered, evidence, uiAction: { type: 'NAVIGATE', screen: 'home' }, data: { mode: this.d.mode, memoriesUsed: mems.length, preferences: prefs, ...(baselineUsdt ? { baselineUsdt } : {}) },
     });
   }
 
@@ -275,6 +281,69 @@ export class AgentService {
         return reply({ intent, response: text.slice(0, 400), sections: [{ label: 'FACT', text }], evidence: [{ type: 'order', reference: `order:${o.id}`, value: o.status, timestamp: o.updatedAt }], data: { orderId: o.id } });
       }
 
+      case 'GET_SESSION_PNL': {
+        const msgs = await this.d.sessions.messages(userId, req.sessionId, 500);
+        const first = msgs.find((m) => (m.metadata as { baselineUsdt?: string } | null)?.baselineUsdt);
+        const base = (first?.metadata as { baselineUsdt?: string } | undefined)?.baselineUsdt;
+        if (!first || !base) return reply({ intent, response: 'I have no starting value for this session, so I cannot work out its profit or loss.', sections: [{ label: 'INFO', text: 'No starting value for this session.' }] });
+        this.d.portfolio.invalidate();
+        const now = await this.d.portfolio.getPortfolio();
+        const diff = dec.sub(dec.parse(now.totalValueUsdt), dec.parse(base));
+        const share = dec.gt(dec.parse(base), dec.ZERO) ? dec.fmtFixed(dec.pctChange(dec.parse(base), dec.parse(now.totalValueUsdt)), 2) : '0';
+        // A move too small to show in percent is "0.00%", never a "+" next to a loss.
+        const shareText = dec.parse(share) === dec.ZERO ? '0.00%' : pct(share);
+        const signed = `${dec.lt(diff, dec.ZERO) ? '' : '+'}${money(dec.fmtFixed(diff, 2))} USDT (${shareText})`;
+        const trades = await this.d.trading.latestOrderForSession(userId, req.sessionId);
+        const lines: AgentReply['sections'] = [
+          { label: 'FACT', text: `Session P&L: ${signed}.` },
+          { label: 'FACT', text: `From ${money(base)} to ${money(now.totalValueUsdt)} USDT.` },
+          { label: 'INFO', text: trades ? `Last trade: ${trades.side} ${trades.symbol} ${outcomeWord(trades.status, trades.failureReason).toUpperCase()}.` : 'No trades this session.' },
+        ];
+        return reply({ intent, response: lines.map((l) => l.text).join(' '), sections: lines, evidence: [{ type: 'portfolio', reference: 'portfolio:testnet', value: now.totalValueUsdt, timestamp: now.timestamp }] });
+      }
+
+      case 'CREATE_PLAN': {
+        if (p.missing?.length || !p.asset || !p.plan) {
+          const t = 'Tell me the asset and the level, for example: "alert me if Bitcoin drops 2 percent and buy 20 dollars".';
+          return reply({ intent, response: t, requiresClarification: true, sections: [{ label: 'INFO', text: t }] });
+        }
+        const symbol = await this.symbolFor(userId, p.asset, symbols);
+        const { plan, alreadyMet } = await this.d.plans.create(userId, {
+          symbol, direction: p.plan.direction, price: p.plan.price, percent: p.plan.percent,
+          side: p.side, quoteOrderQty: p.quote, quantity: p.quantity, sellFraction: p.fraction,
+        });
+        const action = PlanService.actionText(plan);
+        const lines: AgentReply['sections'] = [
+          { label: 'INFO', text: `Plan armed: ${PlanService.label(plan)}.` },
+          { label: 'FACT', text: `Now ${price(plan.referencePrice)}.` },
+          { label: 'INFO', text: action ? `Then ${action}, once you approve.` : 'Alert only. No order attached.' },
+          { label: 'INFO', text: alreadyMet ? 'Level already reached: firing now.' : 'Watching for 24 hours.' },
+        ];
+        return reply({ intent, response: lines.map((l) => l.text).join(' '), sections: lines, data: { planId: plan.id, planArmed: true } });
+      }
+
+      case 'GET_PLANS': {
+        const list = await this.d.plans.listArmed(userId);
+        const lines: AgentReply['sections'] = list.length
+          ? list.map((x) => ({ label: 'INFO' as const, text: `${PlanService.label(x)}${PlanService.actionText(x) ? ` then ${PlanService.actionText(x)}` : ''}` }))
+          : [{ label: 'INFO' as const, text: 'No plans armed. Say "alert me if Bitcoin drops 2 percent".' }];
+        return reply({ intent, response: lines.map((l) => l.text).join('; '), sections: lines });
+      }
+
+      case 'CANCEL_PLAN': {
+        const symbol = p.asset ? await this.symbolFor(userId, p.asset, symbols) : undefined;
+        if (!symbol && !p.allPlans) {
+          const armed = await this.d.plans.listArmed(userId);
+          if (armed.length > 1) {
+            const t = 'You have more than one plan. Say which asset, or "cancel all plans".';
+            return reply({ intent, response: t, requiresClarification: true, sections: [{ label: 'INFO', text: t }] });
+          }
+        }
+        const gone = await this.d.plans.cancel(userId, symbol ? { symbol } : {});
+        const t = gone.length ? `Cancelled: ${gone.map((x) => PlanService.label(x)).join(', ')}.` : 'There was no plan to cancel.';
+        return reply({ intent, response: t, sections: [{ label: 'INFO', text: t }] });
+      }
+
       case 'PREPARE_TRADE':
         return this.prepareTrade(userId, req.sessionId, p, symbols);
 
@@ -288,11 +357,26 @@ export class AgentService {
         });
       }
 
+      case 'GET_OPEN_ORDERS': {
+        const open = await this.d.trading.openOrders(userId);
+        const lines: AgentReply['sections'] = open.length
+          ? open.slice(0, 6).map((o) => ({ label: 'FACT' as const, text: this.orderLine(o) }))
+          : [{ label: 'INFO' as const, text: 'No open orders.' }];
+        return reply({ intent, response: lines.map((l) => l.text).join('; ').slice(0, 400), sections: lines });
+      }
+
+      case 'CANCEL_ORDER': {
+        // Looking at a proposal, "cancel ..." means that proposal, which was never sent.
+        const proposal = await this.pendingProposal(userId, req.sessionId, req.displayedProposalId);
+        if (proposal) return this.rejectPending(userId, req.sessionId, proposal);
+        return this.askToCancel(userId, p.asset);
+      }
+
       case 'REJECT_TRADE': {
         const proposal = await this.pendingProposal(userId, req.sessionId, req.displayedProposalId);
+        if (!proposal && /\border\b/i.test(req.text)) return this.askToCancel(userId, undefined);
         if (!proposal) return reply({ intent, response: 'There is nothing to cancel.', sections: [{ label: 'INFO', text: 'Nothing to cancel.' }] });
-        await this.d.trading.reject(userId, proposal.id, req.sessionId);
-        return reply({ intent, response: 'Proposal cancelled. Nothing was sent to the exchange.', sections: [{ label: 'INFO', text: 'Proposal cancelled. Nothing was sent to the exchange.' }], uiAction: { type: 'REJECT_PROPOSAL', proposalId: proposal.id } });
+        return this.rejectPending(userId, req.sessionId, proposal);
       }
 
       case 'ASK_FINANCIAL_QUESTION':
@@ -314,18 +398,64 @@ export class AgentService {
     }
   }
 
+  // ------------------------------------------------------------------ rejecting and cancelling
+  private async rejectPending(userId: string, sessionId: string, proposal: TradeProposal): Promise<AgentReply> {
+    await this.d.trading.reject(userId, proposal.id, sessionId);
+    const text = 'Proposal cancelled. Nothing was sent to the exchange.';
+    return reply({ intent: 'REJECT_TRADE', response: text, sections: [{ label: 'INFO', text }], uiAction: { type: 'REJECT_PROPOSAL', proposalId: proposal.id } });
+  }
+
+  private orderLine(o: { side: string; symbol: string; originalQuantity: string | null; price: string | null; status: string }): string {
+    const base = o.symbol.replace(/(USDT|USDC)$/, '');
+    return `${o.side} ${o.originalQuantity ? qty(o.originalQuantity) : ''} ${base}${o.price ? ` at ${price(o.price)}` : ''}${o.status === 'PARTIALLY_FILLED' ? ' (part filled)' : ''}`;
+  }
+
+  /** Voice only picks the order and puts it on the lens: the cancellation itself needs an explicit confirmation there. */
+  private async askToCancel(userId: string, asset: string | undefined): Promise<AgentReply> {
+    const open = (await this.d.trading.openOrders(userId)).filter((o) => !asset || o.symbol.startsWith(asset));
+    const target = open[0];
+    if (!target) {
+      const t = asset ? `No open ${asset} order to cancel.` : 'No open order to cancel.';
+      return reply({ intent: 'CANCEL_ORDER', response: t, sections: [{ label: 'INFO', text: t }] });
+    }
+    const t = `Confirm on the glasses to cancel: ${this.orderLine(target)}.`;
+    const { price: limit, ...order } = target;
+    return reply({
+      intent: 'CANCEL_ORDER', response: t, sections: [{ label: 'INFO', text: t }],
+      uiAction: { type: 'CONFIRM_CANCEL', order, price: limit, openCount: open.length },
+    });
+  }
+
   // ------------------------------------------------------------------ trade preparation
   private async prepareTrade(userId: string, sessionId: string, p: ParsedParams, symbols: string[]): Promise<AgentReply> {
+    const notes: string[] = [];
+    if (p.asset && p.side === 'BUY' && p.orderType !== 'LIMIT' && p.missing?.length === 1 && p.missing[0] === 'amount') {
+      // A numeric string comes back from the JSONB column as a number, so accept both and validate.
+      const raw = String((await this.d.memory.preferences(userId)).default_buy_usdt ?? '');
+      const saved = /^\d+(\.\d+)?$/.test(raw) ? raw : null;
+      const usual = saved ?? (await this.d.trading.lastFilledBuyAmount(userId));
+      if (usual) {
+        notes.push(`SMART DEFAULT: your ${saved ? 'usual' : 'last'} ${usual} USDT`);
+        p = { ...p, quote: usual, missing: [] };
+      }
+    }
     if (p.missing?.length || !p.asset || !p.side) {
       const need = p.missing?.includes('asset') ? 'which asset' : 'how much';
       const t = `I need ${need}. Say for example: "buy 20 USDT of BTC".`;
       return reply({ intent: 'PREPARE_TRADE', response: t, requiresClarification: true, sections: [{ label: 'INFO', text: t }] });
     }
     const symbol = await this.symbolFor(userId, p.asset, symbols);
+    let quantity = p.quantity;
+    if (p.fraction && p.side === 'SELL') {
+      // "Sell half": the backend turns the share into an exact quantity, which is what gets approved.
+      const sized = await this.d.trading.sellQuantity(symbol, p.fraction, p.orderType ?? 'MARKET');
+      notes.push(`${PlanService.shareText(p.fraction).toUpperCase()} ${qty(sized.free)} ${sized.base}`);
+      quantity = sized.quantity;
+    }
     const proposal = await this.d.trading.prepare(userId, {
       sessionId, symbol, side: p.side, orderType: p.orderType ?? 'MARKET',
-      ...(p.quote ? { quoteOrderQty: p.quote } : {}), ...(p.quantity ? { quantity: p.quantity } : {}), ...(p.price ? { price: p.price } : {}),
-    });
+      ...(p.quote ? { quoteOrderQty: p.quote } : {}), ...(quantity ? { quantity } : {}), ...(p.price ? { price: p.price } : {}),
+    }, { notes });
     const amount = proposal.quoteOrderQty ? `${qty(proposal.quoteOrderQty)} ${proposal.quoteAsset}` : `${qty(proposal.quantity!)} ${proposal.baseAsset}`;
     const text = `Testnet ${proposal.orderType} ${proposal.side} ${symbol}, ${amount}. Review and approve on the glasses.`;
     return reply({
@@ -359,7 +489,7 @@ export class AgentService {
     const facts = context.items.filter((i) => i.type === 'ticker' || i.type === 'stats' || i.type === 'portfolio').slice(0, 3);
     if (facts.length === 0 && p.advice) return reply({ intent: 'ASK_FINANCIAL_QUESTION', response: NO_ADVICE, sections: [{ label: 'INFO', text: NO_ADVICE }] });
     if (facts.length === 0) return reply({ intent: 'UNKNOWN', response: `I did not catch that. ${HELP}`, sections: [{ label: 'INFO', text: HELP }] });
-    const cause = 'I cannot verify why it moved: no news or event data source is connected.';
+    const cause = 'Cannot verify why: no news source.';
     return reply({
       intent: 'ASK_FINANCIAL_QUESTION', response: `${facts.map((f) => f.text).join(' ')} ${cause}`.slice(0, 400),
       sections: [...(p.advice ? [{ label: 'INFO' as const, text: NO_ADVICE }] : []), ...facts.map((f) => ({ label: 'FACT' as const, text: f.text })), { label: 'UNVERIFIED', text: cause }],
@@ -401,11 +531,12 @@ export class AgentService {
       if (asset) {
         const symbol = await this.symbolFor(userId, asset, symbols);
         const [t, s] = await Promise.all([this.d.market.getTicker(symbol), this.d.market.getStats(symbol)]);
-        items.push({ ref: `ticker:${symbol}`, type: 'ticker', text: `${symbol} last price ${price(t.price)} (testnet, ${Math.round(t.ageMs / 1000)}s old).`, value: t.price, timestamp: t.timestamp });
-        items.push({ ref: `stats:${symbol}`, type: 'stats', text: `${symbol} 24h change ${pct(s.priceChangePercent)}, high ${price(s.highPrice)}, low ${price(s.lowPrice)}, quote volume ${money(s.quoteVolume, 0)} ${symbol.replace(/^[A-Z0-9]+?(USDT|USDC)$/, '$1')}.`, value: s.priceChangePercent, timestamp: s.timestamp });
+        const base = symbol.replace(/(USDT|USDC)$/, '');
+        items.push({ ref: `ticker:${symbol}`, type: 'ticker', text: `${base} price ${price(t.price)}${t.fresh ? '' : ' (STALE)'}.`, value: t.price, timestamp: t.timestamp });
+        items.push({ ref: `stats:${symbol}`, type: 'stats', text: `${base} 24h ${pct(s.priceChangePercent)}, range ${price(s.lowPrice)} to ${price(s.highPrice)}.`, value: s.priceChangePercent, timestamp: s.timestamp });
       } else if (/\b(portfolio|holdings?|account|balance|how am i doing)\b/i.test(text)) {
         const pf = await this.d.portfolio.getPortfolio();
-        items.push({ ref: 'portfolio:testnet', type: 'portfolio', text: `Portfolio about ${money(pf.totalValueUsdt)} USDT over ${pf.coverage.priced} priced assets (testnet)${pf.change24hPercent ? `, 24h ${pct(pf.change24hPercent)}` : ''}.`, value: pf.totalValueUsdt, timestamp: pf.timestamp });
+        items.push({ ref: 'portfolio:testnet', type: 'portfolio', text: `Portfolio ~${money(pf.totalValueUsdt)} USDT${pf.change24hPercent ? `, 24h ${pct(pf.change24hPercent)}` : ''}.`, value: pf.totalValueUsdt, timestamp: pf.timestamp });
       }
     } catch (err) {
       if (!this.isExchangeIssue(err) && !(err instanceof AppError)) throw err;

@@ -2,6 +2,7 @@ import { money, pct, price, qty, type AgentReply } from '@pulse/shared';
 import type { GlassesView } from '../sdk/types';
 import type { PulseState } from '../state/types';
 import { BODY_LINES, LINE, ascii, clip, twoCol, wrap } from '../utils/text';
+import { PRACTICE_REQUESTS } from '../practice/requests';
 
 /**
  * Pure state -> view renderers. Rules: one thing that matters per screen, <= 6 short lines, ASCII only,
@@ -12,6 +13,9 @@ const sym = (s: string) => s.replace(/(USDT|USDC)$/, '');
 const arrow = (p: string | null) => (p === null ? ' ' : p.startsWith('-') ? 'v' : '^');
 const age = (ms: number) => `${Math.max(0, Math.round(ms / 1000))}s`;
 const tag = (s: PulseState) => (s.mode === 'DEMO' ? 'DEMO' : 'TESTNET');
+/** Simulated orders are never presented as the exchange's. */
+const orderNo = (s: PulseState, id: string | null) => `${s.mode === 'DEMO' ? 'DEMO' : 'BINANCE'} ORDER #${id ?? '-'}`;
+const confirmedWord = (s: PulseState) => (s.mode === 'DEMO' ? 'SIMULATED' : 'CONFIRMED');
 
 export function greeting(now: number): string {
   const h = new Date(now).getHours();
@@ -36,10 +40,12 @@ function connection(s: PulseState): GlassesView {
     : s.connectionStatus === 'reconnecting' ? 'RECONNECTING'
     : s.connectionStatus === 'exchange_unavailable' ? 'EXCHANGE UNAVAILABLE'
     : 'CONNECTING';
+  const offer = s.canPractice && !s.practice;
   return {
     header: `PULSE  ${tag(s)}`,
-    body: [title, '', twoCol('BACKEND', word(s.backend), 30), twoCol('EXCHANGE', word(s.exchange), 30), twoCol('SESSION', auth, 30),
-      ...(s.connectionStatus === 'auth_required' ? ['Enter the pairing code in the app'] : [])].slice(0, BODY_LINES),
+    body: [title, ...(offer ? [] : ['']), twoCol('BACKEND', word(s.backend), 30), twoCol('EXCHANGE', word(s.exchange), 30), twoCol('SESSION', auth, 30),
+      ...(s.connectionStatus === 'auth_required' ? ['Enter the pairing code in the app'] : []),
+      ...(offer ? ['DBL-TAP: PRACTICE, NO SERVER'] : [])].slice(0, BODY_LINES),
     footer: s.lastError ? clip(s.lastError, 50) : 'TAP: RETRY',
   };
 }
@@ -53,7 +59,8 @@ function home(s: PulseState): GlassesView {
     body.push(twoCol('TODAY', p.change24hPercent ? pct(p.change24hPercent) : 'n/a', 36));
   } else body.push('PORTFOLIO  unavailable');
   if (w.length) body.push(w.map((i) => `${sym(i.symbol)} ${price(i.price!)}`).join('   '));
-  return { header: `PULSE  ${tag(s)}`, body: body.slice(0, BODY_LINES), footer: hint(s, s.notice ? clip(s.notice, 50) : 'DBL-TAP: ASK   SWIPE: NEXT') };
+  const idle = s.armedPlans > 0 ? `${s.armedPlans} PLAN${s.armedPlans > 1 ? 'S' : ''} ARMED   DBL-TAP: ASK` : 'DBL-TAP: ASK   SWIPE: NEXT';
+  return { header: `PULSE  ${tag(s)}`, body: body.slice(0, BODY_LINES), footer: hint(s, s.notice ? clip(s.notice, 50) : idle) };
 }
 
 function portfolio(s: PulseState): GlassesView {
@@ -91,7 +98,8 @@ function watchlist(s: PulseState): GlassesView {
   return { header: `WATCHLIST  ${tag(s)}`, body: rows, footer: hint(s, 'SWIPE: MOVE  TAP: OPEN') };
 }
 
-const LABEL: Record<AgentReply['sections'][number]['label'], string> = { FACT: 'FACT', AI: 'AI VIEW', UNVERIFIED: 'UNVERIFIED', INFO: '' };
+// Verified facts are plain lines; anything that is not verified exchange data is always labelled.
+const LABEL: Record<AgentReply['sections'][number]['label'], string> = { FACT: '', AI: 'AI VIEW', UNVERIFIED: 'UNVERIFIED', INFO: '' };
 
 export function insightLines(r: AgentReply): string[] {
   const lines: string[] = [];
@@ -110,8 +118,8 @@ function insight(s: PulseState): GlassesView {
   const max = Math.max(0, lines.length - BODY_LINES);
   const off = Math.min(s.scroll, max);
   const more = lines.length > BODY_LINES ? ` ${off + 1}-${Math.min(lines.length, off + BODY_LINES)}/${lines.length}` : '';
-  const title = r.source === 'ai' ? 'ANSWER  (AI)' : r.intent === 'UNKNOWN' ? 'PULSE' : 'ANSWER  (VERIFIED DATA)';
-  return { header: title, body: lines.slice(off, off + BODY_LINES), footer: hint(s, `${lines.length > BODY_LINES ? 'SWIPE: SCROLL ' : ''}DBL-TAP: ASK${more}`) };
+  const title = r.intent === 'CREATE_PLAN' ? 'TRADE PLAN' : r.intent === 'GET_SESSION_PNL' ? 'YOUR SESSION' : r.intent === 'GET_OPEN_ORDERS' ? 'OPEN ORDERS' : r.intent === 'START_SESSION' ? 'SESSION' : r.source === 'ai' ? 'ANSWER  (AI)' : r.intent === 'UNKNOWN' ? 'PULSE' : s.mode === 'DEMO' ? 'PRACTICE' : 'VERIFIED DATA';
+  return { header: `${title}  ${tag(s)}`, body: lines.slice(off, off + BODY_LINES), footer: hint(s, `${lines.length > BODY_LINES ? 'SWIPE: SCROLL ' : ''}DBL-TAP: ASK${more}`) };
 }
 
 function proposal(s: PulseState): GlassesView {
@@ -123,16 +131,46 @@ function proposal(s: PulseState): GlassesView {
   const reject = s.approvalChoice === 'REJECT' ? '> REJECT <' : '  REJECT  ';
   const approve = s.approvalChoice === 'APPROVE' ? '> APPROVE <' : '  APPROVE  ';
   return {
-    header: `TRADE PROPOSAL  TESTNET`,
+    header: `${s.activeAlert?.proposal?.id === p.id ? 'PLAN FIRED' : 'TRADE PROPOSAL'}  ${tag(s)}`,
     body: [
       `${p.side} ${p.baseAsset}   (${p.symbol})`,
       twoCol('AMOUNT', amount, 34),
       twoCol('PRICE', px, 34),
       twoCol('EST FEE', `${p.estimatedFee ?? '-'} ${p.quoteAsset}`, 34),
-      p.warnings[0] ? clip(p.warnings[0], LINE) : 'THIS IS A TESTNET TRADE',
+      p.warnings[0] ? clip(p.warnings[0], LINE) : s.mode === 'DEMO' ? 'DEMO: NOTHING IS SENT' : 'THIS IS A TESTNET TRADE',
       `${reject}      ${approve}`,
     ],
     footer: hint(s, `SWIPE: CHOOSE  TAP: CONFIRM  ${left}s`),
+  };
+}
+
+function cancel(s: PulseState): GlassesView {
+  const c = s.pendingCancel;
+  if (!c) return { header: 'CANCEL ORDER', body: ['No order selected.'], footer: 'TAP: HOME' };
+  const o = c.order;
+  const base = sym(o.symbol);
+  const number = orderNo(s, o.exchangeOrderId);
+  if (c.done) {
+    const gone = o.status === 'CANCELED';
+    const filled = o.executedQuantity && o.executedQuantity !== '0' ? `FILLED BEFORE: ${qty(o.executedQuantity)} ${base}` : 'NOTHING WAS FILLED';
+    return {
+      header: `ORDER ${gone ? `CANCELLED  ${confirmedWord(s)}` : o.status}`,
+      body: [`${o.side} ${base}`, filled, '', number], footer: hint(s, 'TAP: HOME'),
+    };
+  }
+  const keep = s.cancelChoice === 'KEEP' ? '> KEEP <' : '  KEEP  ';
+  const drop = s.cancelChoice === 'CANCEL' ? '> CANCEL IT <' : '  CANCEL IT  ';
+  return {
+    header: `CANCEL ORDER?  ${tag(s)}`,
+    body: [
+      `${o.side} ${base}   (${o.symbol})`,
+      twoCol('AMOUNT', `${o.originalQuantity ? qty(o.originalQuantity) : '-'} ${base}`, 34),
+      twoCol('LIMIT', c.price ? price(c.price) : '-', 34),
+      o.executedQuantity && o.executedQuantity !== '0' ? twoCol('FILLED', `${qty(o.executedQuantity)} ${base}`, 34) : number,
+      c.openCount > 1 ? `NEWEST OF ${c.openCount} OPEN ORDERS` : '',
+      `${keep}      ${drop}`,
+    ],
+    footer: hint(s, 'SWIPE: CHOOSE  TAP: CONFIRM'),
   };
 }
 
@@ -140,13 +178,47 @@ function result(s: PulseState): GlassesView {
   const r = s.lastResult;
   if (!r) return { header: 'ORDER RESULT', body: ['Nothing yet.'], footer: 'TAP: HOME' };
   const o = r.order;
+  // An accepted order that has not filled is waiting on the exchange.
+  if (o?.confirmed && o.status === 'NEW' && o.exchangeOrderId && o.originalQuantity) {
+    const what = `${o.side} ${qty(o.originalQuantity)} ${sym(o.symbol)}`;
+    const at = r.proposal.price ? `AT ${price(r.proposal.price)} ${r.proposal.quoteAsset}` : '';
+    return { header: 'ORDER RESULT  OPEN', body: [what, at, 'WAITING TO FILL', '', orderNo(s, o.exchangeOrderId)], footer: hint(s, 'TAP: HOME') };
+  }
+  // A confirmed fill needs only what happened, the price and the exchange's order number.
+  if (o?.confirmed && o.status === 'FILLED' && o.exchangeOrderId && o.executedQuantity) {
+    const done = `${o.side === 'BUY' ? 'BOUGHT' : 'SOLD'} ${qty(o.executedQuantity)} ${sym(o.symbol)}`;
+    const at = o.averagePrice ? `AT ${price(o.averagePrice)} ${o.symbol.slice(sym(o.symbol).length)}` : '';
+    return { header: `ORDER RESULT  ${confirmedWord(s)}`, body: [done, at, '', orderNo(s, o.exchangeOrderId)], footer: hint(s, 'TAP: HOME') };
+  }
   const body = [...wrap(r.message, LINE).slice(0, 3)];
   if (o) {
     body.push(`${o.side} ${o.symbol}  ${o.status}`);
     if (o.executedQuantity && o.executedQuantity !== '0') body.push(twoCol(`FILLED ${qty(o.executedQuantity)}`, o.averagePrice ? `@ ${price(o.averagePrice)}` : '', 36));
-    body.push(o.exchangeOrderId ? `BINANCE ORDER #${o.exchangeOrderId}` : 'NOT CONFIRMED BY EXCHANGE');
+    body.push(o.exchangeOrderId ? orderNo(s, o.exchangeOrderId) : 'NOT CONFIRMED BY EXCHANGE');
   }
-  return { header: `ORDER RESULT  ${r.order?.confirmed ? 'CONFIRMED' : 'PENDING'}`, body: body.slice(0, BODY_LINES), footer: hint(s, 'TAP: HOME') };
+  return { header: `ORDER RESULT  ${r.order?.confirmed ? confirmedWord(s) : 'PENDING'}`, body: body.slice(0, BODY_LINES), footer: hint(s, 'TAP: HOME') };
+}
+
+function alertScreen(s: PulseState): GlassesView {
+  const a = s.activeAlert;
+  if (!a) return { header: 'ALERT', body: ['Nothing new.'], footer: 'TAP: HOME' };
+  return {
+    header: `PLAN FIRED  ${tag(s)}`,
+    body: [
+      `${sym(a.plan.symbol)} ${a.plan.direction} ${price(a.plan.triggerPrice)}`,
+      a.plan.observedPrice ? twoCol('NOW', price(a.plan.observedPrice), 30) : '',
+      '',
+      ...wrap(a.proposal ? 'Order ready.' : a.note ?? a.message, LINE).slice(0, 3),
+    ],
+    footer: hint(s, 'TAP: HOME   DBL-TAP: ASK'),
+  };
+}
+
+/** Practice mode: choose a request with swipe and tap, since there is no speech service. */
+function tryList(s: PulseState): GlassesView {
+  const start = Math.max(0, Math.min(s.listIndex - 2, PRACTICE_REQUESTS.length - BODY_LINES));
+  const body = PRACTICE_REQUESTS.slice(start, start + BODY_LINES).map((t, i) => clip(`${start + i === s.listIndex ? '>' : ' '} ${t}`, LINE));
+  return { header: `TRY SAYING  ${tag(s)}`, body, footer: 'SWIPE: CHOOSE  TAP: RUN  HOLD: HOME' };
 }
 
 function error(s: PulseState): GlassesView {
@@ -157,8 +229,9 @@ export function renderScreen(s: PulseState): GlassesView {
   let v: GlassesView;
   if (s.voiceState === 'LISTENING') {
     v = { header: 'LISTENING', body: ['', 'Speak now...', '', 'Double-tap to send', 'Hold to cancel'], footer: 'MIC ON' };
-  } else if (s.voiceState === 'PROCESSING') {
-    v = { header: 'THINKING', body: ['', 'Checking verified data...'], footer: 'HOLD: CANCEL' };
+  } else if (s.voiceState === 'PROCESSING' || s.voiceState === 'RESPONDING') {
+    // RESPONDING: the reply's data is still loading. Never show the previous screen as if it were the answer.
+    v = { header: 'THINKING', body: ['', 'Checking...'], footer: 'HOLD: CANCEL' };
   } else {
     switch (s.currentScreen) {
       case 'connection': v = connection(s); break;
@@ -168,7 +241,10 @@ export function renderScreen(s: PulseState): GlassesView {
       case 'watchlist': v = watchlist(s); break;
       case 'insight': v = insight(s); break;
       case 'proposal': v = proposal(s); break;
+      case 'cancel': v = cancel(s); break;
       case 'result': v = result(s); break;
+      case 'alert': v = alertScreen(s); break;
+      case 'try': v = tryList(s); break;
       default: v = error(s);
     }
   }

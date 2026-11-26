@@ -1,6 +1,7 @@
 node_modules/
 dist/
 *.ehpk
+apps/glasses/app.pack.json
 .env
 .env.*
 *.log

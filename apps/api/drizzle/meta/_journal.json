@@ -8,6 +8,20 @@
       "when": 1795548583134,
       "tag": "0000_init",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1795696938448,
+      "tag": "0001_trade_plans",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1795701997888,
+      "tag": "0002_plan_watching",
+      "breakpoints": true
     }
   ]
 }

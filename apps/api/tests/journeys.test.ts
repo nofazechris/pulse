@@ -89,7 +89,7 @@ describe.skipIf(!HAS_DB)('acceptance journeys', () => {
       expect(r.status).toBe(200);
       const g = r.body.data.greeting;
       expect(g.intent).toBe('START_SESSION');
-      expect(texts(g)).toContain('FACT: Portfolio about 76,000.00 USDT across 3 priced assets (testnet)');
+      expect(texts(g)).toContain('FACT: Portfolio ~76,000.00 USDT');
       expect(texts(g)).toContain('Watchlist:');
       expect(r.body.data.session.status).toBe('active');
     });
@@ -141,7 +141,7 @@ describe.skipIf(!HAS_DB)('acceptance journeys', () => {
       const why = await say(alice, sid, 'Why is Bitcoin moving today?');
       expect(why.source).toBe('deterministic');
       expect(texts(why)).toContain('FACT:');
-      expect(texts(why)).toMatch(/UNVERIFIED: I cannot verify why it moved/);
+      expect(texts(why)).toMatch(/UNVERIFIED: Cannot verify why/);
       expect(texts(why)).not.toMatch(/because|due to|news says|analysts/i);
     });
 
@@ -211,11 +211,12 @@ describe.skipIf(!HAS_DB)('acceptance journeys', () => {
     });
 
     it('asks for what is missing instead of guessing, and treats "I want to trade" as no action', async () => {
-      const sid = await h.startSession(alice);
-      const missing = await say(alice, sid, 'buy bitcoin');
+      const fresh = await h.createUser(); // no trade history, so there is no default amount to fall back on
+      const sid = await h.startSession(fresh);
+      const missing = await say(fresh, sid, 'buy bitcoin');
       expect(missing.requiresClarification).toBe(true);
       expect(missing.uiAction).toBeUndefined();
-      const vague = await say(alice, sid, 'I want to trade bitcoin');
+      const vague = await say(fresh, sid, 'I want to trade bitcoin');
       expect(vague.uiAction?.type).not.toBe('SHOW_PROPOSAL');
       const rows = await h.db.select().from(tradeProposals).where(eq(tradeProposals.sessionId, sid));
       expect(rows).toHaveLength(0);
@@ -293,7 +294,8 @@ describe.skipIf(!HAS_DB)('acceptance journeys', () => {
       const greeting = texts(s2.body.data.greeting);
       expect(greeting).toContain('I remember:');
       expect(greeting).toContain('focus on BTC and ETH');
-      expect(greeting).toContain('Last session:');
+      expect(greeting).toContain('Last time: No trades.');
+      expect(greeting).not.toContain('Assets:');
       expect(s2.body.data.greeting.response).toMatch(/^Welcome back\./);
       expect(s2.body.data.greeting.data.preferences).toMatchObject({ preferred_quote: 'USDC' });
 

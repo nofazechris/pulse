@@ -1,42 +1,45 @@
-# Demo script (about 2-3 minutes, simulator)
+# Demo script (about 3 minutes, simulator)
 
 ## Easiest way: the demo autopilot (you only press record and talk)
 
 The app can perform the whole demo by itself through the real controller (real Binance Testnet data, the real approval flow, ONE small approved testnet order). It also shows a **teleprompter** (what to say, what to point at) in the app window.
 
 ```powershell
-npm run dev          # terminal 1: API on :8787 + glasses dev server on :5173
+npm run dev          # terminal 1: API on :8787 + glasses dev server on :5180
 npm run demo         # terminal 2: opens the Even Hub simulator and starts the autopilot after a 5 s countdown
 ```
 
 1. Wait until `npm run demo` has opened the simulator (two windows: the glasses and the app panel). The autopilot waits until the app is paired and on Home, then shows "Recording starts in 5...".
 2. Start your screen recorder when you see the countdown (Windows: **Win+G** -> Capture; or OBS). Capture both simulator windows side by side.
-3. Read the narration box aloud as it changes. It finishes in about 2 minutes (3 at worst on a slow connection). `npm run demo:fast` is a tighter cut. **Stop demo** aborts it.
-4. You can also start it from the app panel ("Demo autopilot" -> Run demo) or open `http://localhost:5173/?autorun=1&countdown=5` in a browser (in-memory glasses preview instead of the simulator).
+3. Read the narration box aloud as it changes. It takes about 2 and a half minutes of app time (more on a slow connection). `npm run demo:fast` is a tighter cut. **Stop demo** aborts it.
+4. You can also start it from the app panel ("Demo autopilot" -> Run demo) or open `http://localhost:5180/?autorun=1&countdown=5` in a browser (in-memory glasses preview instead of the simulator).
 
-What it does, in order: home -> start session -> biggest holding -> Bitcoin performance -> "why is it moving" (facts vs UNVERIFIED) -> add SOL to watchlist -> prepare a $50 BTC buy -> swipe to APPROVE -> tap -> Binance-confirmed result with order id -> last order status -> remember a preference -> end session -> new session that remembers it -> safety close.
+What it does, in order: home -> start session -> biggest holding -> a **spoken** question ("How is Bitcoin doing?", transcribed live) -> "why is it moving" (facts vs UNVERIFIED) -> arm a trade plan -> the plan fires with a prepared order -> swipe to APPROVE -> tap -> Binance-confirmed fill with order id -> session P&L -> "sell half my Bitcoin" at a price far above the market -> approve -> the order rests -> "cancel my order" -> swipe and tap -> Binance-confirmed cancellation -> remember a preference -> new session that remembers it.
 
 Each run starts clean (it resets the demo watchlist and closes pending proposals; exchange order history is never deleted) and places exactly one testnet order. The script lives in `apps/glasses/src/demo/script.ts`; edit the wording/timing there.
 
-If voice matters to you: with `STT_PROVIDER`/`STT_API_KEY` set you can instead double-tap and speak the same lines yourself; the autopilot types them for you so the video is reliable.
+The spoken step plays a synthesized clip (`apps/glasses/public/demo/wearer-btc.wav`, 16 kHz mono like the G2 microphone) into the real speech-to-text; it needs `STT_PROVIDER`/`STT_API_KEY`. The other requests are typed by the autopilot, which is the same path speech takes after transcription. You can also double-tap and speak any line yourself.
 
-## Recording it silently with ffmpeg (how demo-video/pulse-demo.mp4 was made)
+## Recording the video (how demo-video/pulse-demo.mp4 is made)
 
-`scripts/record-demo.mjs` records ONLY the two simulator windows' screen rectangles (not your desktop) and joins them side by side. Windows can only be recorded correctly while they are on top, so pin them first (otherwise whatever covers them, e.g. a chat window, is recorded). Steps used:
+No screen capture: the exact glasses frames come from the simulator's automation API, then ffmpeg composes a 1080p video with a title card, the lens, captions, subtitles, the voiceover and a closing card.
 
-1. `npm run dev`, then start the simulator on a long countdown: `npx evenhub-simulator "http://localhost:5173/?autorun=1&countdown=20"`.
-2. Put the two simulator windows on top and read their rectangles (the window titles are "Glasses Display" and "Browser"; DPI-aware pixel coordinates; crop ~8 px of invisible border).
-3. `node scripts/record-demo.mjs capture --panel x,y,w,h --glasses x,y,w,h --seconds 200`
-4. Find where the first step starts (the panel switches from "Recording starts in N..." to "DEMO 1/15"), then `node scripts/record-demo.mjs compose --trim <seconds> --length <seconds>`.
+```powershell
+npm run dev                                 # terminal 1
+node scripts/make-voiceover.mjs             # once, or after editing apps/glasses/src/demo/narration.json
+node scripts/record-demo.mjs capture        # terminal 2 (waits for the simulator)
+npm run demo:record                         # terminal 3 (simulator + autopilot)
+node scripts/record-demo.mjs compose        # when capture has finished
+```
 
-Output: `demo-video/pulse-demo.mp4` (git-ignored; silent; the on-screen caption box is the teleprompter for a voice-over added later, e.g. in Clipchamp).
+The voice is AI-generated (OpenAI `gpt-4o-mini-tts`, voice "cedar"). Each take buys 20 USDT of BTC on testnet, then places a resting sell and cancels it. If a take is interrupted, check for a resting order and cancel it before the next one.
 
 ## Manual script
 
 **Setup (once):** `apps/api/.env` filled (Neon, Binance testnet key, `SESSION_SECRET`, `PAIRING_CODE`); `apps/glasses/.env.development.local` has `VITE_DEMO_PAIRING_CODE` for auto-pair.
 
 ```powershell
-npm run dev          # API :8787 + Vite :5173
+npm run dev          # API :8787 + Vite :5180
 npm run simulator    # Even Hub simulator (second terminal)
 ```
 
@@ -48,14 +51,14 @@ Speak the lines (or type them in the companion panel's "Talk to PULSE" box / cli
 | 0:15 | "Pulse, start my trading session." | Greeting built from verified data (and "Welcome back..." on later runs) | Session + memory |
 | 0:25 | "What's my biggest holding?" | Portfolio screen: biggest asset and total over priced assets, "N unpriced excluded" | Real read; honest about junk testnet assets |
 | 0:40 | "How is Bitcoin performing?" | Market screen: price, 24h %, high/low, age | Verified fact with freshness |
-| 0:55 | "Why is Bitcoin moving today?" | `FACT:` lines + `UNVERIFIED: I cannot verify why it moved: no news or event data source is connected.` | No fabricated causes |
+| 0:55 | "Why is Bitcoin moving today?" | Plain verified lines (facts) + `UNVERIFIED: Cannot verify why: no news source.` (AI wording may differ) | No fabricated causes |
 | 1:10 | "Add SOL to my watchlist" | Watchlist with live prices/arrows | Write to Neon |
 | 1:20 | "Prepare a $50 BTC buy." | **Trade proposal**: TESTNET banner, BUY BTC (BTCUSDT), 50 USDT, MARKET ~price, est. fee, `> REJECT <` preselected | Exact terms, safe default |
-| 1:40 | Swipe down (selection moves to `> APPROVE <`), tap | "THINKING..." then **ORDER RESULT: CONFIRMED**, `Bought ... BTC at avg ...`, `BINANCE ORDER #<id>` | Approved write, exchange-confirmed |
+| 1:40 | Swipe down (selection moves to `> APPROVE <`), tap | "THINKING" then **ORDER RESULT CONFIRMED**, `BOUGHT ... BTC`, `AT ... USDT`, `BINANCE ORDER #<id>` | Approved write, exchange-confirmed |
 | 2:00 | (optional) Tap approve again / say "approve" with nothing pending | Nothing happens: no duplicate order, "nothing waiting for approval" | Safety |
 | 2:10 | "What happened to my last order?" | Status read back from Binance | Read after write |
 | 2:25 | "Remember that I focus on BTC and ETH." then "End my session." | Saved; session summary | Persistent memory |
-| 2:40 | Start a new session | Greeting: "Welcome back... I remember: focus on btc and eth... Last session: ..." | Memory across sessions |
+| 2:40 | Start a new session | Greeting: "I remember: focus on btc and eth", "Last time: 1 filled, ..." | Memory across sessions |
 | 2:50 | Show the panel Diagnostics | DB, Binance testnet, AI/STT provider status, request ids | Reliability |
 
 **Backup beats (if time):** hold during the proposal = cancel (nothing sent); a proposal left alone expires (countdown in footer); "price of dogecoin" -> honest "not listed".

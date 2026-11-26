@@ -1,44 +1,63 @@
 import type { GlassesGesture } from '../sdk/types';
+import durations from './durations.json';
+import narration from './narration.json';
 
 /**
- * The scripted 3-minute demo. Every step is something a real wearer would say or do; the autopilot
- * performs it through the same controller the glasses use (typed transcripts + gestures), so it exercises
- * the real backend, the real Binance Testnet and the real approval flow. The narration is a teleprompter.
+ * The scripted demo (about 2.5 minutes of app footage between a title and a closing card). Every step is
+ * something a real wearer would say or do; the autopilot performs it through the same controller the glasses
+ * use, so it exercises the real backend, the real Binance Testnet and the real approval flow.
+ * `narration.json` is both the on-screen teleprompter and the voiceover text; `durations.json` holds the
+ * measured length of each voice clip (scripts/make-voiceover.mjs), so each step is held until it is spoken.
  */
 export type DemoAction =
   | { type: 'none' }
+  /** `{BTC_NEAR}` is replaced at run time with a level just above the live price (so the plan fires on camera). */
   | { type: 'say'; text: string }
+  /** Recorded speech in public/demo/<clip>.wav, transcribed live by the real speech-to-text. */
+  | { type: 'voice'; clip: string }
+  /** Swipe to the second choice (APPROVE, or CANCEL IT), pause so it can be seen, then tap. */
+  | { type: 'confirm' }
   | { type: 'gesture'; gesture: GlassesGesture }
-  | { type: 'endSession' }
-  | { type: 'newSession' };
+  /** Wait for the armed trade plan to fire and put its prepared order on the glasses. */
+  | { type: 'waitAlert' }
+  /** End the session and start a new one that greets the returning wearer. */
+  | { type: 'restart' };
+
+export type NarrationId = keyof typeof narration;
 
 export interface DemoStep {
-  id: string;
-  /** Short heading shown in the panel. */
+  id: Exclude<NarrationId, 'title' | 'how' | 'who' | 'closing'>;
+  /** Short heading shown in the panel and in the video caption. */
   title: string;
-  /** What to say out loud over the recording (teleprompter text). */
   narration: string;
   action: DemoAction;
-  /** How long to hold the result on screen after the action completes (before pace scaling). */
-  dwellMs: number;
+  /** Length of the spoken line; the step is held at least this long. */
+  voiceMs: number;
 }
 
+const step = (id: DemoStep['id'], title: string, action: DemoAction): DemoStep => ({
+  id, title, action, narration: narration[id], voiceMs: (durations as Record<string, number>)[id] ?? 5000,
+});
+
 export const DEMO_STEPS: readonly DemoStep[] = [
-  { id: 'intro', title: 'Glanceable home', narration: 'This is PULSE on Even G2. One glance: my testnet portfolio, today\'s move, and live prices - all from Binance.', action: { type: 'none' }, dwellMs: 5000 },
-  { id: 'start', title: 'Start a session', narration: 'One phrase starts my trading session. The greeting is built only from verified exchange data.', action: { type: 'say', text: 'Pulse, start my trading session' }, dwellMs: 6000 },
-  { id: 'holding', title: 'Read: biggest holding', narration: 'I ask about my biggest holding. Real balances, valued in USDT, with unpriced testnet junk excluded.', action: { type: 'say', text: "What's my biggest holding?" }, dwellMs: 6500 },
-  { id: 'perf', title: 'Read: market', narration: 'Bitcoin\'s price, 24-hour move, high and low, and how old the data is.', action: { type: 'say', text: 'How is Bitcoin performing?' }, dwellMs: 6000 },
-  { id: 'why', title: 'Honest answers', narration: 'I ask why. PULSE gives verified facts and says plainly it cannot verify the cause. No invented news.', action: { type: 'say', text: 'Why is Bitcoin moving today?' }, dwellMs: 5000 },
-  { id: 'why-scroll', title: 'Facts vs unverified', narration: 'Facts, AI view and unverified claims are labelled separately.', action: { type: 'gesture', gesture: 'swipe_down' }, dwellMs: 5000 },
-  { id: 'watch', title: 'Write: watchlist', narration: 'Adding Solana to my watchlist is saved to Neon and shows live prices.', action: { type: 'say', text: 'Add SOL to my watchlist' }, dwellMs: 5000 },
-  { id: 'prepare', title: 'Prepare a trade', narration: 'Now a trade. PULSE prepares a proposal with exact terms and a TESTNET banner. REJECT is preselected, so nothing happens by accident.', action: { type: 'say', text: 'Prepare a $50 BTC buy' }, dwellMs: 8000 },
-  { id: 'choose', title: 'Choose APPROVE', narration: 'I swipe to choose APPROVE.', action: { type: 'gesture', gesture: 'swipe_down' }, dwellMs: 3000 },
-  { id: 'approve', title: 'Approve and execute', narration: 'One tap approves exactly this proposal. The backend re-validates it, Binance executes it, and the screen shows what Binance confirmed, with the order id.', action: { type: 'gesture', gesture: 'click' }, dwellMs: 9000 },
-  { id: 'status', title: 'Read after write', narration: 'I can check that order any time; the status comes straight from Binance.', action: { type: 'say', text: 'What happened to my last order?' }, dwellMs: 6000 },
-  { id: 'remember', title: 'Persistent memory', narration: 'I tell PULSE a preference. It is stored in Neon and only explicit statements are remembered.', action: { type: 'say', text: 'Remember that I focus on BTC and ETH' }, dwellMs: 4000 },
-  { id: 'end', title: 'End the session', narration: 'I end the session.', action: { type: 'endSession' }, dwellMs: 3000 },
-  { id: 'again', title: 'Welcome back', narration: 'A new session: PULSE remembers my preference and what we did last time.', action: { type: 'newSession' }, dwellMs: 8000 },
-  { id: 'outro', title: 'Safety', narration: 'Testnet only. No withdrawals, no margin, no autonomous trading. AI interprets, the backend validates, I authorize, Binance executes. This is PULSE.', action: { type: 'none' }, dwellMs: 6000 },
+  step('home', 'One glance', { type: 'none' }),
+  step('start', 'Start a session', { type: 'say', text: 'Pulse, start my trading session' }),
+  step('holding', 'Biggest holding', { type: 'say', text: "What's my biggest holding?" }),
+  step('voice', 'Real voice', { type: 'voice', clip: 'wearer-btc' }),
+  step('why', 'Why is it moving?', { type: 'say', text: 'Why is Bitcoin moving today?' }),
+  step('plan', 'Trade plans', { type: 'say', text: 'Alert me if Bitcoin is below {BTC_NEAR} and buy 20 dollars' }),
+  step('fired', 'Plan fired', { type: 'waitAlert' }),
+  step('choose', 'Safe by default', { type: 'gesture', gesture: 'swipe_down' }),
+  step('approve', 'Approve', { type: 'gesture', gesture: 'click' }),
+  step('session', 'Session P&L', { type: 'say', text: 'How is my session?' }),
+  step('sell', 'Sell half', { type: 'say', text: 'Sell half my Bitcoin at {BTC_HIGH}' }),
+  step('place', 'Place the order', { type: 'confirm' }),
+  step('cancel', 'Cancel by voice', { type: 'say', text: 'Cancel my order' }),
+  step('confirm', 'Confirmed cancel', { type: 'confirm' }),
+  step('remember', 'Memory', { type: 'say', text: 'Remember that I focus on BTC and ETH' }),
+  step('again', 'Welcome back', { type: 'restart' }),
 ];
 
-export const totalDwellMs = (steps: readonly DemoStep[] = DEMO_STEPS, pace = 1) => steps.reduce((n, s) => n + s.dwellMs * pace, 0);
+/** Silence after each spoken line. */
+export const VOICE_GAP_MS = 500;
+export const totalSpeechMs = (steps: readonly DemoStep[] = DEMO_STEPS) => steps.reduce((n, s) => n + s.voiceMs + VOICE_GAP_MS, 0);

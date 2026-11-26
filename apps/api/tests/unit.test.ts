@@ -412,7 +412,11 @@ describe('env validation', () => {
     expect(env.API_PORT).toBe(8787);
     expect(env.DATABASE_URL).toBeUndefined();
     expect(env.AI_PROVIDER).toBe('none');
-    expect(env.CORS_ORIGIN).toEqual(['http://localhost:5173']);
+    expect(env.CORS_ORIGIN).toEqual(['http://localhost:5180']);
+    // hosting platforms pass PORT; an explicit API_PORT still wins
+    expect(parseEnv({ NODE_ENV: 'test', PORT: '10000' }).API_PORT).toBe(10000);
+    expect(parseEnv({ NODE_ENV: 'test', PORT: '10000', API_PORT: '9000' }).API_PORT).toBe(9000);
+    expect(parseEnv({ NODE_ENV: 'test', CORS_ORIGIN: '*' }).CORS_ORIGIN).toEqual(['*']);
     try { parseEnv({ NODE_ENV: 'test', DATABASE_URL: 'mysql://user:hunter2@h/db' }); } catch (e) { expect(String(e)).not.toContain('hunter2'); }
     expect(() => parseEnv({ NODE_ENV: 'test', DATABASE_URL: 'mysql://user:hunter2@h/db' })).toThrow(/DATABASE_URL/);
   });

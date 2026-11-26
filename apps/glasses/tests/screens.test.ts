@@ -29,6 +29,8 @@ const screens: Array<[string, PulseState]> = [
   ['proposal (reject selected)', state({ currentScreen: 'proposal', activeProposal: proposal(), voiceState: 'AWAITING_APPROVAL' })],
   ['proposal (approve selected)', state({ currentScreen: 'proposal', activeProposal: proposal({ orderType: 'LIMIT', price: '59000.5', quantity: '0.001', quoteOrderQty: undefined as never }), approvalChoice: 'APPROVE' })],
   ['proposal with warning', state({ currentScreen: 'proposal', activeProposal: proposal({ warnings: ['Quantity rounded down to 0.00123 (lot step 0.00001).'] }) })],
+  ['cancel order', state({ currentScreen: 'cancel', pendingCancel: { order: { ...executeResult().order!, status: 'NEW', executedQuantity: '0.0001' }, price: '50000', openCount: 3, done: false } })],
+  ['cancel order (done)', state({ currentScreen: 'cancel', pendingCancel: { order: { ...executeResult().order!, status: 'CANCELED' }, price: '50000', openCount: 1, done: true } })],
   ['result', state({ currentScreen: 'result', lastResult: executeResult() })],
   ['result (unverified)', state({ currentScreen: 'result', lastResult: executeResult({ order: null, message: 'Order status is being verified.' }) })],
   ['error', state({ currentScreen: 'error', lastError: 'Binance Testnet is unavailable right now.' })],
@@ -92,11 +94,32 @@ describe('screen content', () => {
     expect(confirmed.header).toContain('CONFIRMED');
     expect(confirmed.body.join('\n')).toContain('BINANCE ORDER #123456');
   });
-  it('insight labels facts, AI interpretation and unverified claims separately', () => {
+  it('insight leaves facts plain and always labels AI interpretation and unverified claims', () => {
     const lines = renderScreen(state({ currentScreen: 'insight', lastReply: longReply })).body.join('\n') + renderScreen(state({ currentScreen: 'insight', lastReply: longReply, scroll: 3 })).body.join('\n');
-    expect(lines).toContain('FACT:');
+    expect(lines).not.toContain('FACT:');
+    expect(lines).toMatch(/^BTCUSDT last price/);
     expect(lines).toContain('AI VIEW:');
     expect(lines).toContain('UNVERIFIED:');
+  });
+  it('keeps the testnet tag on answer screens', () => {
+    expect(renderScreen(state({ currentScreen: 'insight', lastReply: longReply })).header).toContain('TESTNET');
+  });
+  it('a resting order says it is waiting, not filled', () => {
+    const base = executeResult();
+    const v = renderScreen(state({ currentScreen: 'result', lastResult: executeResult({ proposal: proposal({ orderType: 'LIMIT', price: '70500' }), order: { ...base.order!, side: 'SELL', status: 'NEW', executedQuantity: '0' } }) }));
+    expect(v.header).toBe('ORDER RESULT  OPEN');
+    expect(v.body).toContain('WAITING TO FILL');
+    expect(v.body.join('\n')).toMatch(/AT 70,500\.00 USDT/);
+    expect(v.body.join(' ')).not.toMatch(/sold|bought/i);
+  });
+  it('a confirmed fill is four short lines', () => {
+    const v = renderScreen(state({ currentScreen: 'result', lastResult: executeResult() }));
+    expect(v.body.length).toBe(4);
+    expect(v.body[0]).toMatch(/^BOUGHT [\d.,]+ BTC$/);
+    expect(v.body[1]).toMatch(/^AT [\d.,]+ USDT$/);
+  });
+  it('shows thinking, not the previous screen, while a reply is still loading', () => {
+    expect(renderScreen(state({ currentScreen: 'market', market: stats, voiceState: 'RESPONDING' })).header).toBe('THINKING');
   });
   it('marks stale data', () => {
     const text = renderScreen(state({ currentScreen: 'portfolio', portfolio: { ...portfolio, fresh: false, ageMs: 90_000 } })).footer;

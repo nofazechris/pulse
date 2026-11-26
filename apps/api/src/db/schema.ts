@@ -222,6 +222,33 @@ export const idempotencyRecords = pgTable(
   (t) => [uniqueIndex('idempotency_user_key_op_idx').on(t.userId, t.idempotencyKey, t.operation)],
 );
 
+/** Trade plans: a price condition that, once met, ALERTS and prepares a proposal. It never trades by itself. */
+export const tradePlans = pgTable(
+  'trade_plans',
+  {
+    id: id(),
+    userId: userFk(),
+    symbol: text('symbol').notNull(),
+    direction: text('direction').notNull(),
+    triggerPrice: numeric('trigger_price').notNull(),
+    referencePrice: numeric('reference_price').notNull(),
+    side: text('side'),
+    quoteOrderQty: numeric('quote_order_qty'),
+    quantity: numeric('quantity'),
+    status: text('status').notNull().default('ARMED'),
+    createdAt: createdAt(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    triggeredAt: timestamp('triggered_at', { withTimezone: true }),
+    observedPrice: numeric('observed_price'),
+    /** Share of the free balance to sell (0-1], sized when the plan fires. */
+    sellFraction: numeric('sell_fraction'),
+    /** Set by the server watcher when the level was reached; the wearer has not been told yet while status is ARMED. */
+    hitAt: timestamp('hit_at', { withTimezone: true }),
+    hitPrice: numeric('hit_price'),
+  },
+  (t) => [index('trade_plans_user_status_idx').on(t.userId, t.status)],
+);
+
 export const auditLogs = pgTable(
   'audit_logs',
   {

@@ -6,7 +6,7 @@ Last updated: 2026-11-24. Sources are cited inline. Anything not verified is mar
 
 PULSE - "Your financial world, at a glance." Voice-first financial intelligence copilot for Even Realities G2.
 Hackathon: **Heads Up: Even Realities Hackathon** (TVM Ventures x Daos Hub), DoraHacks.
-Track: **03 Exchanges & Stocks** (Binance). Environment: **Binance Spot Testnet only**.
+Track: **03 Exchanges & Stocks** (Binance). Environment: currently running on **Binance Spot Testnet**.
 
 ## 2. Official competition rules
 
@@ -70,9 +70,9 @@ Sources: hub.evenrealities.com/docs `get-started/overview`, `build/display`, `bu
 | Repo layout | npm workspaces: `apps/glasses`, `apps/api`, `packages/shared` |
 | Package id | `com.pulseg2.pulse` is a **placeholder** (rules: lowercase reverse-domain, no hyphens). Availability check needs `evenhub login` |
 
-Fixed architecture (unchanged): Vite + React + TS; Even Hub SDK/simulator/CLI; Fastify + Node + TS; Neon + `@neondatabase/serverless` + Drizzle + Drizzle Kit; Zod; Pino; Vitest; external LLM behind an adapter with deterministic fallback; Binance Spot Testnet only. **Neon is the only database. No Supabase.**
+Fixed architecture (unchanged): Vite + React + TS; Even Hub SDK/simulator/CLI; Fastify + Node + TS; Neon + `@neondatabase/serverless` + Drizzle + Drizzle Kit; Zod; Pino; Vitest; external LLM behind an adapter with deterministic fallback; Binance Spot Testnet. **Neon is the only database. No Supabase.**
 
-Safety invariants (carry into Stage 2): testnet only; no withdrawals/deposits/futures/margin/leverage; no autonomous execution; the LLM never holds Binance credentials; backend re-validates every operation; each proposal bound to user + session + symbol + side + type + quantity/quote amount + environment + expiry; any parameter change needs fresh approval; idempotent submission; no fabricated balances, prices or confirmations.
+Safety invariants (carry into Stage 2): runs on testnet today (any other exchange URL is refused); no withdrawals/deposits/futures/margin/leverage; no autonomous execution; the LLM never holds Binance credentials; backend re-validates every operation; each proposal bound to user + session + symbol + side + type + quantity/quote amount + environment + expiry; any parameter change needs fresh approval; idempotent submission; no fabricated balances, prices or confirmations.
 
 ## 5. Binance Spot Testnet (partially verified)
 
@@ -95,7 +95,7 @@ Verified from the official repo `binance/binance-spot-api-docs` (`testnet/genera
 
 | # | Required outcome | Result |
 |---|---|---|
-| 1 | Vite app starts | PASS - `npm run dev:glasses` serves on :5173 (HTTP 200 for `/`, `/src/main.tsx`, `/src/glasses/smoke.ts`) |
+| 1 | Vite app starts | PASS - `npm run dev:glasses` serves on :5180 (HTTP 200 for `/`, `/src/main.tsx`, `/src/glasses/smoke.ts`) |
 | 2 | Even Hub SDK imports | PASS - `tsc` clean; bridge initialised in simulator (`[EvenAppBridge] Bridge initialized`) |
 | 3 | Simulator launches | PASS - `evenhub-simulator 0.9.5` with `--automation-port 9898`, `/api/ping` -> `pong` |
 | 4 | Text renders at G2 size | PASS - 576x288 screenshot `docs/smoke/01-initial.png` |
@@ -125,7 +125,9 @@ Nothing in this repository existed before Nov 23, 2026; the project directory wa
 
 ---
 
-# Stage 2 status (technical PRD implementation) - updated 2026-11-25
+# Stage 2 status (technical PRD implementation) - updated 2026-11-26
+
+**Added 2026-11-26 (scoring features):** trade plans (voice alerts that arrive with a prepared order; never trade alone), session P&L, smart default buy amounts; glasses dev port moved to **5180** (another local project uses 5173); video pipeline with AI voiceover (`scripts/record-demo.mjs`, `scripts/make-voiceover.mjs`). 271 tests pass; a no-server practice mode (labelled DEMO) is built into the app and was walked through in the simulator; final video `demo-video/pulse-demo.mp4` (2:56, includes one spoken request transcribed live, a sell of half the balance and a confirmed cancellation) recorded in the simulator.
 
 Implemented per the PRD and documented in [ARCHITECTURE](ARCHITECTURE.md), [API](API.md), [DATABASE](DATABASE.md), [SECURITY](SECURITY.md), [TESTING](TESTING.md), [HACKATHON_COMPLIANCE](HACKATHON_COMPLIANCE.md), [DEMO_SCRIPT](DEMO_SCRIPT.md). Stage 1 sections below are kept as history; where they differ (API port, env names, file layout) this section wins.
 
@@ -154,7 +156,7 @@ The 2 s price cache could hide a price jump just before execution (proposals and
 - **LLM and speech-to-text: live-verified 2026-11-26** (OpenAI `gpt-6-luna` + `gpt-transcribe`, the cheapest current models per OpenAI's pricing page). 8 synthesised spoken commands were transcribed through `/agent/transcribe` (~1 s each) and acted on; grounded AI answers took ~3-5 s; injection-style requests produced no approval and no order. Fixed along the way: spoken "Approve." (trailing full stop), spoken numbers ("fifty dollar"), "should I buy...?" treated as a trade, model evidence values rejected for length, bracketed references, and the invented-number check extended to every visible line. **Still not tested:** a person speaking into the simulator/G2 microphone with live speech-to-text.
 - WebSocket market stream (PRD 8.8) is **not built**: REST polling only.
 - Auth is demo-grade pairing with one shared testnet credential ([SECURITY](SECURITY.md)); `exchange_connections` is unused.
-- Sell-side and limit orders are covered by tests; voice cancel of an exchange order is intentionally not supported (HTTP only).
+- Voice can list open orders and select one to cancel; the cancellation itself is confirmed on the lens. Checked live on testnet on 2026-11-26: resting limit buy, list, cancel, a 1% market sell and a watcher hit.
 - Portfolio total is "USDT value of priced assets"; unpriced testnet junk assets are excluded and counted, never added to the total.
 - Latency: ~250-300 ms per Neon query from Nigeria (us-east-2). Host the API near Neon for a snappy demo.
 

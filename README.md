@@ -1,22 +1,80 @@
 # PULSE
 
-**Your financial world, at a glance.** A voice-first financial copilot for Even Realities G2 smart glasses.
-Heads Up: Even Realities Hackathon 2026 - track **Exchanges & Stocks** - Binance **Spot Testnet only**.
+**Your financial world, at a glance.** A voice-first trading copilot for Even Realities G2 smart glasses.
+Heads Up: Even Realities Hackathon 2026, track **Exchanges & Stocks** (Binance), currently running on **Binance Spot Testnet**. The demo video is attached to the DoraHacks submission.
 
-PULSE reads your Binance Spot Testnet account and markets, answers questions from verified data, and lets you prepare and **explicitly approve** testnet trades from the glasses. It is not a chatbot and not a dashboard squeezed onto a wearable: one thing per screen, voice and tap, and every number comes from the exchange.
+**The problem.** Checking a position or acting on a price move means pulling out a phone, and "trading by voice" is dangerous without guardrails.
+**For whom.** Active traders who want a glance, a short phrase and one confirming tap.
+**How.** The glasses show one thing at a time. A backend reads Binance, an AI only explains, and nothing is traded or cancelled until you confirm the exact terms on the lens.
 
 > **AI interprets. Verified services retrieve data. The backend validates. The user authorizes. Binance executes.**
+
+| | |
+|---|---|
+| ![Home: portfolio, today's move and prices](docs/images/lens-home.png) <br> Glance | ![AI answer with an unverified line](docs/images/lens-answer.png) <br> Why is it moving? Facts, and what is unverified |
+| ![A trade plan being armed](docs/images/lens-plan.png) <br> Decide while calm | ![The plan fired: order prepared, REJECT preselected](docs/images/lens-approval.png) <br> Confirm fast, safe by default |
+| ![Confirmed fill with the Binance order number](docs/images/lens-filled.png) <br> What Binance confirmed | ![Sell half, sized exactly](docs/images/lens-sell-half.png) <br> "Sell half my Bitcoin" |
+| ![Cancel an open order, KEEP preselected](docs/images/lens-cancel.png) <br> Cancel by voice, confirm by hand | ![Welcome back with memory](docs/images/lens-welcome.png) <br> It remembers |
+
+Screens are captured from the Even Hub simulator (576 x 288).
+
+## Try it in two minutes: no server, no keys
+
+```powershell
+npm install
+npm run dev:glasses    # first terminal
+npm run simulator      # second terminal
+```
+
+With no server running, the first screen offers **practice mode**: double-tap. Double-tap again for a list of requests, swipe to choose, tap to run, then swipe and tap to approve. The packaged `pulse.ehpk` offers the same.
+
+Practice mode uses **sample prices and a made-up account, and simulates orders**. Every screen is marked DEMO or SIMULATED, nothing touches the network, and speech is off because speech-to-text needs the server. The demo video shows the real mode against Binance Spot Testnet; to run that yourself, follow [Setup](#setup).
+
+## What you can say
+
+| Say | What happens |
+|---|---|
+| "Pulse, start my trading session" | Greeting from live data, plus what you asked it to remember |
+| "What's my biggest holding?" / "Show my portfolio" | Real balances, valued; unpriced test coins are left out |
+| "How is Bitcoin doing?" / "Why is Bitcoin moving today?" | Price, move and range; an answer that labels what it cannot verify |
+| "Buy 20 dollars of Bitcoin" / "Buy Bitcoin" | A proposal to approve; with no amount it suggests your usual or last one, labelled |
+| "Sell half my Bitcoin" (also a quarter, all, N percent) | The backend sizes the exact quantity you approve |
+| "Buy 20 dollars of Bitcoin at 50000" | A limit order that can rest on the exchange |
+| "Alert me if Bitcoin drops 2 percent and buy 20 dollars" | A trade plan (below) |
+| "Show my plans" / "Cancel all plans" | Manage plans |
+| "Show my open orders" / "Cancel my order" | Speech picks the order; a swipe and a tap cancel it |
+| "How is my session?" | Profit and loss since the session started |
+| "Remember that I focus on BTC and ETH" | Saved memory you can review and delete |
+
+Gestures: **double tap** talks (and cancels a proposal), **swipe** chooses or scrolls, **tap** confirms, **long press** goes back.
+
+## Trade plans: decide calm, confirm fast
+
+*"Alert me if Bitcoin drops 2 percent and buy 20 dollars"* or *"If Bitcoin rises 5 percent, sell half."* The server watches the price, even when the app is closed. A G2 app cannot alert you while it is closed, so you see it when you open PULSE: if the level still holds, the **prepared order** appears with REJECT preselected; if the price has moved back, you are told and nothing is prepared. A plan never trades by itself, never replaces a decision you are in the middle of, fires once, and expires after 24 hours.
+
+## Why a trader would trust it
+
+- Approval is bound to a SHA-256 hash of the exact terms shown; changed terms need a new approval.
+- Execution is idempotent and reconciled with Binance: a network failure never sends an order twice, and "success" is shown only when Binance confirms it.
+- The model cannot approve, execute or cancel; those intents come only from a deterministic parser, and the backend re-checks every order against exchange rules and balances.
+- Verified numbers come from the exchange. AI interpretation and unverified claims are labelled.
+
+## Who it is for, and how it could pay
+
+Built for active retail traders on Binance who cannot watch a screen all day. The safety layer sits behind an exchange adapter, so other exchanges can be added without changing the glasses experience. Possible models, none built yet: a subscription for plans and alerts, or partnerships with exchanges. Demand and pricing are not validated yet.
 
 ## What works
 
 - Glasses app (Vite + React + TS, official Even Hub SDK) with screens for connection, home, portfolio, market, watchlist, AI insight, trade proposal and execution result, sized for 576x288 monochrome green.
 - Voice pipeline (mic -> backend STT -> intent -> verified data -> display) with a typed-transcript fallback that uses the same path; gesture navigation validated against the simulator.
 - Backend (Fastify, Zod, Pino) over Binance Spot Testnet: public market data, signed account data, portfolio valuation, watchlist, orders.
-- Trade flow: proposal -> exact-terms approval -> idempotent execution -> reconciliation; cancel by id.
+- Trade flow: proposal -> exact-terms approval -> idempotent execution -> reconciliation; market and limit orders, selling a share, open orders and cancelling.
+- Server-side trade plan watching, session profit and loss, smart default amounts.
+- 271 automated tests (fake exchange + Neon); the order flows were also checked live on Binance Spot Testnet.
 - Persistent memory, preferences, sessions, audit log in **Neon PostgreSQL** (Drizzle).
 - Replaceable AI provider (Anthropic / OpenAI-compatible) and STT provider, each with a deterministic fallback.
 
-See [docs/PROJECT.md](docs/PROJECT.md) (decisions, rules, status), [ARCHITECTURE](docs/ARCHITECTURE.md), [API](docs/API.md), [DATABASE](docs/DATABASE.md), [SECURITY](docs/SECURITY.md), [TESTING](docs/TESTING.md), [HACKATHON_COMPLIANCE](docs/HACKATHON_COMPLIANCE.md), [DEMO_SCRIPT](docs/DEMO_SCRIPT.md).
+See [docs/PROJECT.md](docs/PROJECT.md) (decisions, rules, status), [ARCHITECTURE](docs/ARCHITECTURE.md), [API](docs/API.md), [DATABASE](docs/DATABASE.md), [SECURITY](docs/SECURITY.md), [TESTING](docs/TESTING.md), [HACKATHON_COMPLIANCE](docs/HACKATHON_COMPLIANCE.md), [DEMO_SCRIPT](docs/DEMO_SCRIPT.md), [DEPLOY](docs/DEPLOY.md), [SUBMISSION](docs/SUBMISSION.md).
 
 ## Layout
 
@@ -36,7 +94,7 @@ Node 22.13+ or 24 (developed on 24.15), npm, Git. A free [Neon](https://neon.com
 ```powershell
 npm install
 # create apps/api/.env from the template below, then:
-npm run db:migrate                                  # creates the 14 tables in Neon
+npm run db:migrate                                  # creates the 15 tables in Neon
 npm run db:check                                    # one query against Neon
 ```
 
@@ -48,7 +106,7 @@ HOST=0.0.0.0
 API_PORT=8787
 API_BASE_URL=http://localhost:8787
 LOG_LEVEL=info
-CORS_ORIGIN=http://localhost:5173
+CORS_ORIGIN=http://localhost:5180
 
 DATABASE_URL=
 DATABASE_DIRECT_URL=
@@ -106,13 +164,13 @@ STT_MODEL=gpt-transcribe
 ## Run
 
 ```powershell
-npm run dev            # API on :8787 and the glasses dev server on :5173
-npm run simulator      # Even Hub simulator pointed at :5173 (second terminal)
+npm run dev            # API on :8787 and the glasses dev server on :5180
+npm run simulator      # Even Hub simulator pointed at :5180 (second terminal)
 npm run simulator:auto # same, with the headless control API on :9898 (screenshots/input)
 npm run demo           # simulator + scripted demo autopilot with an on-screen teleprompter (for recording the video)
 ```
 
-Open <http://localhost:5173> in a normal browser to use the companion panel with an in-memory adapter (no simulator needed).
+Open <http://localhost:5180> in a normal browser to use the companion panel with an in-memory adapter (no simulator needed).
 
 ## Scripts
 
@@ -127,17 +185,18 @@ Open <http://localhost:5173> in a normal browser to use the companion panel with
 | `npm run ai:check` | Verify the optional LLM / speech keys with one small call each |
 | `npm run simulator` / `simulator:auto` | Even Hub simulator |
 | `npm run demo` / `demo:fast` | Simulator + demo autopilot (see [DEMO_SCRIPT](docs/DEMO_SCRIPT.md)); places one small testnet order |
-| `npm run pack:ehpk` | build + `evenhub pack` -> `pulse.ehpk` |
+| `npm run pack:ehpk` | build, check the bundle for secrets, `evenhub pack` -> `pulse.ehpk`; add `-- --api https://your.host` for a hosted backend ([DEPLOY](docs/DEPLOY.md)) |
 
 ## Safety
 
-Testnet only (any other URL refuses to start). No withdrawals, deposits, futures, margin or leverage (the endpoints are not reachable). No autonomous execution: nothing is sent without an explicit approval of the exact proposal shown on the glasses, re-validated by the backend. The LLM never holds exchange credentials and can neither approve nor execute. Results shown are what Binance confirmed. Not financial advice. Details and limitations (demo-grade pairing, single shared testnet credential): [docs/SECURITY.md](docs/SECURITY.md).
+Running on Binance Spot Testnet right now (the server refuses any other exchange URL). No withdrawals, deposits, futures, margin or leverage (the endpoints are not reachable). No autonomous execution: nothing is sent without an explicit approval of the exact proposal shown on the glasses, re-validated by the backend. The LLM never holds exchange credentials and can neither approve nor execute. Results shown are what Binance confirmed. Not financial advice. Details and limitations (demo-grade pairing, single shared testnet credential): [docs/SECURITY.md](docs/SECURITY.md).
 
 ## Known limitations
 
 - Verified in the Even Hub simulator only; no physical G2 was available. LLM (OpenAI `gpt-6-luna`) and speech-to-text (`gpt-transcribe`) were verified live on 2026-11-26 with synthesised speech; a live voice through the simulator or glasses microphone is still to be tried.
 - Neon is ~250 ms per query from some regions; host the API next to the Neon region for a snappy demo ([ARCHITECTURE](docs/ARCHITECTURE.md)).
-- `app.json` whitelists `http://localhost:8787` for the simulator; a real-device build needs a public HTTPS backend origin.
+- The default package talks to a server at `http://localhost:8787`; without one it offers practice mode. Real data on a device needs a hosted HTTPS backend and a package built for it ([DEPLOY](docs/DEPLOY.md)).
+- Pairing is demo-grade: one pairing code, one shared demo user and testnet account.
 - `binance.com` / `developers.binance.com` may be unreachable on some networks; only `testnet.binance.vision` is needed.
 
 ## What existed before Nov 23

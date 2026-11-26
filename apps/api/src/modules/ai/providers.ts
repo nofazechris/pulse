@@ -11,6 +11,7 @@ HARD RULES:
 - Cite each fact with evidence: [{"type","reference": <item ref exactly>,"value","timestamp"}].
 - Keep "response" under 200 characters, plain text, no markdown.
 - "facts": short statements copied from context. "interpretation": optional cautious reading, clearly your interpretation. "unverified": use when a cause cannot be confirmed from the context (it usually cannot).
+- The glasses show about six short lines. Give at most 2 facts, each under 40 characters. Keep "unverified" under 40 characters. Add "interpretation" only if essential, under 60 characters. Use plain words for the wearer: never mention "context", "data provided" or item references in "facts", "interpretation" or "unverified".
 - Never claim to know why a price moved unless a context item states it. Correlation is not causation.
 - No financial advice, no predictions, no recommendations to buy or sell.
 - You cannot approve, submit or cancel orders and must never say an order succeeded. To start a trade set action {"type":"PREPARE_TRADE","parameters":{"asset","side","quote"|"quantity","price"?}}; the backend validates it and the user must approve on the glasses.
@@ -125,7 +126,7 @@ export class DeterministicProvider implements AIProvider {
       intent: 'ASK_FINANCIAL_QUESTION',
       response: facts.length ? facts[0]!.text.slice(0, 200) : 'I do not have verified data for that.',
       facts: facts.map((f) => f.text.slice(0, 200)),
-      unverified: 'The cause of any movement cannot be verified from the data available to PULSE.',
+      unverified: 'Cannot verify why it moved.',
       evidence: facts.map((f) => ({ type: f.type, reference: f.ref, ...(f.value ? { value: f.value } : {}), ...(f.timestamp ? { timestamp: f.timestamp } : {}) })),
       requiresClarification: false,
     };

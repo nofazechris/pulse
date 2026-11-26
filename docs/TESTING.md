@@ -10,7 +10,8 @@ Everything runs with Vitest from the repo root. Set `TEST_LOG_LEVEL=error` to se
 
 ## Last results (2026-11-25)
 
-- `npm test`: **210 passed, 0 failed** (2026-11-26; API unit, trade-safety, journeys and providers, plus the glasses app and demo script), ~150 s because every Neon call costs ~250 ms from the test machine.
+- Stop any running dev server before `npm test`: tests share the Neon database, and a live server watches every armed plan (including the tests') against real prices.
+- `npm test`: **271 passed, 0 failed** (2026-11-26; includes trade plans, server-side watching, selling a share, order cancelling, session P&L, smart defaults, providers, glasses UI and demo script), ~170 s because every Neon call costs ~250 ms from the test machine.
 - `npm run ai:check`: LLM and speech-to-text both OK against OpenAI. A one-off end-to-end probe (synthesised speech through the real routes, fake exchange) passed; it is not part of the committed suite.
 - `npm run test:integration`: **12 live testnet/Neon tests passed** (two runs: the first had 1 wrong expectation of mine, fixed; the market BUY test then passed alone). These placed small real testnet orders.
 - `npm run typecheck`: clean on all workspaces.
@@ -34,4 +35,4 @@ Automated tests use `SimulatorAdapter` (in-memory). The official simulator is ex
 
 ## Not covered (be honest)
 
-Real G2 hardware; a live human voice through the simulator/device microphone with live speech-to-text; a WebSocket market stream (REST polling only); the Even app whitelist/CORS on a device.
+Real G2 hardware; a live human voice through the simulator/device microphone (the demo sends a synthesized spoken clip to the live speech-to-text); a WebSocket market stream (REST polling only); the Even app whitelist/CORS on a device.

@@ -1,9 +1,8 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { Diagnostics, Memory } from '@pulse/shared';
-import type { ApiClient } from './services/api';
 import type { PulseController } from './state/controller';
 import { runDemo, type DemoDriver } from './demo/runner';
-import { DEMO_STEPS, totalDwellMs, type DemoStep } from './demo/script';
+import { DEMO_STEPS, totalSpeechMs, type DemoStep } from './demo/script';
 
 const QUICK = [
   'start my trading session', 'show my portfolio', "what's my biggest holding", 'how is bitcoin performing',
@@ -12,7 +11,6 @@ const QUICK = [
 
 interface Props {
   controller: PulseController;
-  api: ApiClient;
   apiUrl: string;
   adapterKind: string;
   bridgeNote: string;
@@ -38,8 +36,9 @@ interface DemoUi {
 const idleDemo: DemoUi = { running: false, index: -1, step: null, status: '', countdown: 0, startedAt: 0, elapsed: 0, errors: [], finished: false };
 const mmss = (ms: number) => `${Math.floor(ms / 60000)}:${String(Math.floor(ms / 1000) % 60).padStart(2, '0')}`;
 
-export function App({ controller, api, apiUrl, adapterKind, bridgeNote, driver }: Props) {
+export function App({ controller, apiUrl, adapterKind, bridgeNote, driver }: Props) {
   const state = useSyncExternalStore(controller.subscribe, controller.getState);
+  const api = controller.api; // the real backend, or the practice one once chosen
   const [code, setCode] = useState('');
   const [text, setText] = useState('');
   const [diag, setDiag] = useState<Diagnostics | null>(null);
@@ -61,8 +60,13 @@ export function App({ controller, api, apiUrl, adapterKind, bridgeNote, driver }
     void runDemo(driver, {
       signal: ctl.signal, pace: fast ? 0.7 : 1, countdownSeconds,
       onCountdown: (n) => setDemo((d) => ({ ...d, countdown: n, startedAt: n === 0 ? Date.now() : d.startedAt })),
-      onStep: (index, step, status, error) =>
-        setDemo((d) => ({ ...d, index, step, status, errors: error ? [...d.errors, `${step.title}: ${error}`] : d.errors })),
+      onStep: (index, step, status, error) => {
+        // Machine-readable markers: the video recorder reads them from the simulator console to time captions and voice.
+        if (status === 'running') console.log(`[demo-step] ${step.id} ${Date.now()}`);
+        if (status === 'done' && index === DEMO_STEPS.length - 1) console.log(`[demo-step] end ${Date.now()}`);
+        if (error) console.log(`[demo-error] ${step.id} ${error}`);
+        setDemo((d) => ({ ...d, index, step, status, errors: error ? [...d.errors, `${step.title}: ${error}`] : d.errors }));
+      },
     }).then((r) => {
       clearInterval(tick);
       abortRef.current = null;
@@ -75,7 +79,7 @@ export function App({ controller, api, apiUrl, adapterKind, bridgeNote, driver }
   // ?autorun=1&countdown=5 : used by `npm run demo` so you only have to press record.
   useEffect(() => {
     const q = new URLSearchParams(window.location.search);
-    if (!q.has('autorun') || autoRan.current) return;
+    if (!import.meta.env.DEV || !q.has('autorun') || autoRan.current) return;
     if (state.authenticationStatus === 'authenticated' && state.currentScreen === 'home' && state.activeSessionId) {
       autoRan.current = true;
       if (q.get('pace') === 'fast') setFast(true);
@@ -118,6 +122,14 @@ export function App({ controller, api, apiUrl, adapterKind, bridgeNote, driver }
       <h1>PULSE</h1>
       <p className="tag">Your financial world, at a glance. {state.mode === 'DEMO' ? <b className="demo">DEMO MODE - SIMULATED DATA</b> : <b>BINANCE SPOT TESTNET</b>}</p>
 
+      {!state.practice && (state.backend === 'down' || state.authenticationStatus !== 'authenticated') && (
+        <section>
+          <h2>No server? Practise</h2>
+          <p className="dim">The whole app with sample prices and simulated orders. No keys, no network, nothing is real. On the glasses: double-tap the first screen.</p>
+          <button onClick={() => void controller.startPractice()}>Start practice mode</button>
+        </section>
+      )}
+
       {(demo.running || demo.finished) && (
         <section className="demo" aria-label="demo autopilot">
           {demo.countdown > 0 ? (
@@ -148,10 +160,10 @@ export function App({ controller, api, apiUrl, adapterKind, bridgeNote, driver }
         </section>
       )}
 
-      {state.authenticationStatus === 'authenticated' && (
+      {import.meta.env.DEV && state.authenticationStatus === 'authenticated' && (
         <section>
           <h2>Demo autopilot</h2>
-          <p className="dim">Runs the scripted ~{Math.round(totalDwellMs(DEMO_STEPS, fast ? 0.7 : 1) / 1000 + 50)} s demo through the real app: real Binance Testnet data and ONE small approved testnet order. Start your screen recorder first.</p>
+          <p className="dim">Runs the scripted ~{Math.round((totalSpeechMs(DEMO_STEPS) * (fast ? 0.7 : 1)) / 1000 + 40)} s demo through the real app: real Binance Testnet data, one small approved buy and a resting sell that it cancels. Start your screen recorder first.</p>
           {!demo.running ? (
             <>
               <button onClick={() => startDemo(5)}>Run demo (5 s countdown)</button>{' '}
@@ -192,7 +204,7 @@ export function App({ controller, api, apiUrl, adapterKind, bridgeNote, driver }
         <h2>Diagnostics</h2>
         <dl>
           <dt>SDK / adapter</dt><dd>{adapterKind} - {bridgeNote}</dd>
-          <dt>Backend ({apiUrl})</dt><dd>{state.backend}</dd>
+          <dt>Backend ({state.practice ? 'practice, no server' : apiUrl})</dt><dd>{state.backend}</dd>
           <dt>Database</dt><dd>{diag ? `${diag.database.status} (${diag.database.latencyMs ?? '-'} ms)` : '...'}</dd>
           <dt>Binance Testnet</dt><dd>{diag ? `${diag.exchange.status} (${diag.exchange.latencyMs ?? '-'} ms), last update ${diag.exchange.lastUpdate?.slice(11, 19) ?? '-'}` : '...'}</dd>
           <dt>AI provider</dt><dd>{diag ? `${diag.ai.provider}${diag.ai.configured ? '' : ' (not configured: deterministic fallback)'}` : '...'}</dd>

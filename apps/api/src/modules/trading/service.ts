@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { and, desc, eq, inArray, ne } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNotNull, ne } from 'drizzle-orm';
 import {
   dec, type ExchangeOrderDto, type ExecuteResult, type PrepareTradeRequest, type TradeProposal, type TradeStatus,
 } from '@pulse/shared';
@@ -120,7 +120,8 @@ export class TradingService {
   }
 
   // ---------------------------------------------------------------- prepare
-  async prepare(userId: string, req: PrepareTradeRequest): Promise<TradeProposal> {
+  /** `notes` are server-side context lines (plan fired, smart default) shown first on the approval screen. */
+  async prepare(userId: string, req: PrepareTradeRequest, extra: { notes?: string[] } = {}): Promise<TradeProposal> {
     // Independent reads run together: Neon + exchange latency dominates, so sequential awaits are expensive.
     const [, info, ticker, account] = await Promise.all([
       this.sessions.requireActive(userId, req.sessionId),
@@ -153,7 +154,7 @@ export class TradingService {
       ...(estQty ? { estimatedQuantity: estQty } : {}),
       estimatedTotal: dec.fmtFixed(estTotal, 2),
       estimatedFee: dec.fmtFixed(dec.mul(estTotal, taker), 4),
-      quoteAsset: info.quoteAsset, baseAsset: info.baseAsset, warnings,
+      quoteAsset: info.quoteAsset, baseAsset: info.baseAsset, warnings: [...(extra.notes ?? []), ...warnings],
     };
 
     // Only one live proposal per session: a new one supersedes any still-pending one.
@@ -480,6 +481,34 @@ export class TradingService {
     return o;
   }
 
+  // ---------------------------------------------------------------- open orders
+  /** This user's orders that Binance still reports as open, newest first. Statuses are refreshed from the exchange. */
+  async openOrders(userId: string): Promise<Array<ExchangeOrderDto & { price: string | null }>> {
+    const rows = await this.db.select({ o: exchangeOrders, p: tradeProposals }).from(exchangeOrders)
+      .innerJoin(tradeProposals, eq(tradeProposals.id, exchangeOrders.proposalId))
+      .where(and(eq(exchangeOrders.userId, userId), inArray(exchangeOrders.status, ['NEW', 'PARTIALLY_FILLED'])))
+      .orderBy(desc(exchangeOrders.createdAt)).limit(10);
+    const live = await Promise.all(rows.map(async ({ o, p }) => {
+      const ex = await this.exchange.getOrder(o.symbol, { clientOrderId: o.clientOrderId });
+      const { order } = await this.applyExchangeOrder(p, o, ex);
+      return { ...this.toOrderDto(order), price: nn(p.price) ?? null };
+    }));
+    return live.filter((o) => o.status === 'NEW' || o.status === 'PARTIALLY_FILLED');
+  }
+
+  /** Turns "sell half" into an exact quantity of the free balance, rounded down to the lot step. */
+  async sellQuantity(symbol: string, fraction: string, orderType: 'MARKET' | 'LIMIT' = 'MARKET'): Promise<{ quantity: string; free: string; base: string }> {
+    const share = dec.parse(fraction);
+    if (!dec.gt(share, dec.ZERO) || dec.gt(share, dec.parse('1'))) throw new AppError(422, 'INVALID_FRACTION', 'Sell between 1 and 100 percent.');
+    const [info, account] = await Promise.all([this.market.requireSymbol(symbol), this.portfolio.getAccount(true)]);
+    const free = account.balances.find((b) => b.asset === info.baseAsset)?.free ?? '0';
+    const marketStep = info.filters.marketStepSize;
+    const step = orderType === 'MARKET' && marketStep && marketStep !== '0' ? marketStep : info.filters.stepSize ?? '0';
+    const quantity = dec.floorToStep(dec.mul(dec.parse(free), share), dec.parse(step));
+    if (!dec.gt(quantity, dec.ZERO)) throw new AppError(422, 'NOTHING_TO_SELL', `You have no ${info.baseAsset} free to sell.`);
+    return { quantity: dec.fmt(quantity), free: dec.fmt(dec.parse(free)), base: info.baseAsset };
+  }
+
   // ---------------------------------------------------------------- cancel
   /** Explicit, id-addressed cancellation of one open order. Never infers which order to cancel. */
   async cancelOrder(userId: string, orderId: string): Promise<ExchangeOrderDto & { message: string }> {
@@ -500,6 +529,14 @@ export class TradingService {
     const [p] = await this.db.select().from(tradeProposals)
       .where(and(eq(tradeProposals.userId, userId), eq(tradeProposals.sessionId, sessionId))).orderBy(desc(tradeProposals.createdAt)).limit(1);
     return p ? this.toProposalDto(p) : null;
+  }
+
+  /** Quote amount of the user's most recent filled market buy (a "smart default" for the next one). */
+  async lastFilledBuyAmount(userId: string): Promise<string | null> {
+    const [p] = await this.db.select({ amount: tradeProposals.quoteOrderQty }).from(tradeProposals)
+      .where(and(eq(tradeProposals.userId, userId), eq(tradeProposals.status, 'FILLED'), eq(tradeProposals.side, 'BUY'), isNotNull(tradeProposals.quoteOrderQty)))
+      .orderBy(desc(tradeProposals.createdAt)).limit(1);
+    return p?.amount ? dec.fmt(dec.parse(p.amount)) : null;
   }
 
   async lastOrder(userId: string) {

@@ -15,6 +15,7 @@ import { PortfolioService } from './modules/portfolio/service';
 import { AgentSessionService } from './modules/sessions/agent-sessions';
 import { AuthService } from './modules/sessions/auth';
 import { TradingService } from './modules/trading/service';
+import { PlanService } from './modules/trading/plans';
 
 export interface Services {
   mode: 'LIVE' | 'DEMO';
@@ -31,6 +32,7 @@ export interface Services {
   sessions: AgentSessionService;
   memory: MemoryService;
   trading: TradingService;
+  plans: PlanService;
   agent: AgentService;
 }
 
@@ -73,6 +75,7 @@ export function createServices(env: Env, overrides: ServiceOverrides = {}, log?:
   const sessions = new AgentSessionService(db);
   const memory = new MemoryService(db);
   const trading = new TradingService(db, market, portfolio, exchange, audit, sessions, env);
-  const agent = new AgentService({ market, portfolio, watchlist, trading, sessions, memory, ai, audit, mode, ...(log ? { log } : {}) });
-  return { mode, db, dbPing, exchange, ai, stt, audit, auth, market, portfolio, watchlist, sessions, memory, trading, agent };
+  const plans = new PlanService(db, market, trading, sessions, audit);
+  const agent = new AgentService({ plans, market, portfolio, watchlist, trading, sessions, memory, ai, audit, mode, ...(log ? { log } : {}) });
+  return { mode, db, dbPing, exchange, ai, stt, audit, auth, market, portfolio, watchlist, sessions, memory, trading, plans, agent };
 }

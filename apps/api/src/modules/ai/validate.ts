@@ -47,9 +47,9 @@ export function validateAiResponse(raw: unknown, context: AIContext): AIResponse
   return { ...r, evidence };
 }
 
-const FORBIDDEN_FROM_MODEL: ReadonlySet<Intent> = new Set(['APPROVE_TRADE', 'REJECT_TRADE']);
+const FORBIDDEN_FROM_MODEL: ReadonlySet<Intent> = new Set(['APPROVE_TRADE', 'REJECT_TRADE', 'CANCEL_ORDER']);
 
-/** Approval and rejection can only come from the deterministic parser, never from a model. */
+/** Approval, rejection and order cancellation can only come from the deterministic parser, never from a model. */
 export function validateAiIntent(raw: unknown): IntentResult | null {
   const parsed = z.object({ intent: intentSchema, params: z.record(z.string(), z.unknown()).default({}), confidence: z.number().min(0).max(1).default(0.5) }).safeParse(raw);
   if (!parsed.success) return null;

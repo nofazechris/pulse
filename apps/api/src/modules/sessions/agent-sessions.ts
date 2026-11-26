@@ -1,6 +1,7 @@
 import { and, desc, eq, sql } from 'drizzle-orm';
 import type { Db } from '../../db/client';
 import { agentMessages, agentSessions, tradeProposals } from '../../db/schema';
+import { outcomeWord } from '../trading/state-machine';
 import { AppError } from '../../utils/errors';
 
 export interface SessionRow {
@@ -64,19 +65,23 @@ export class AgentSessionService {
     if (s.status === 'ended') return s;
     const msgs = await this.db.select().from(agentMessages).where(eq(agentMessages.sessionId, id));
     const userMsgs = msgs.filter((m) => m.role === 'user');
-    const intents = new Map<string, number>();
     const symbols = new Set<string>();
     for (const m of userMsgs) {
-      if (m.intent && m.intent !== 'UNKNOWN') intents.set(m.intent, (intents.get(m.intent) ?? 0) + 1);
       const syms = (m.metadata as { symbols?: string[] } | null)?.symbols;
       syms?.forEach((x) => symbols.add(x));
     }
     const trades = await this.db
-      .select({ status: tradeProposals.status, n: sql<number>`count(*)::int` })
-      .from(tradeProposals).where(eq(tradeProposals.sessionId, id)).groupBy(tradeProposals.status);
-    const tradeText = trades.length ? ` Trades: ${trades.map((t) => `${t.n} ${t.status.toLowerCase()}`).join(', ')}.` : '';
-    const topics = [...intents.keys()].map((i) => i.toLowerCase().replace(/_/g, ' ')).slice(0, 4).join(', ');
-    const summary = `${userMsgs.length} request(s)${topics ? `: ${topics}` : ''}.${symbols.size ? ` Assets: ${[...symbols].slice(0, 5).join(', ')}.` : ''}${tradeText}`;
+      .select({ status: tradeProposals.status, reason: tradeProposals.failureReason, n: sql<number>`count(*)::int` })
+      .from(tradeProposals).where(eq(tradeProposals.sessionId, id)).groupBy(tradeProposals.status, tradeProposals.failureReason);
+    const outcomes = new Map<string, number>();
+    for (const t of trades) {
+      const word = outcomeWord(t.status, t.reason);
+      outcomes.set(word, (outcomes.get(word) ?? 0) + t.n);
+    }
+    const tradeText = outcomes.size ? `Trades: ${[...outcomes].map(([word, n]) => `${n} ${word}`).join(', ')}.` : '';
+    // Short enough for the glasses: it is read back in the next session's greeting.
+    const assets = [...symbols].slice(0, 4).map((x) => x.replace(/(USDT|USDC)$/, ''));
+    const summary = `${tradeText || 'No trades.'}${assets.length ? ` Assets: ${assets.join(', ')}.` : ''}`;
     const [row] = await this.db
       .update(agentSessions).set({ status: 'ended', endedAt: new Date(), summary })
       .where(and(eq(agentSessions.id, id), eq(agentSessions.status, 'active'))).returning();

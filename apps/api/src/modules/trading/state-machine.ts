@@ -33,6 +33,10 @@ export function assertTransition(from: TradeStatus, to: TradeStatus): void {
   }
 }
 
+/** The word the wearer reads for a proposal's outcome: an order cancelled on the exchange is not a failure. */
+export const outcomeWord = (status: string, failureReason?: string | null): string =>
+  status === 'FAILED' && failureReason === 'EXCHANGE_CANCELED' ? 'cancelled' : status.toLowerCase().replace(/_/g, ' ');
+
 /** Maps Binance order status (+ executed quantity) to the proposal lifecycle. Exchange state is the only input. */
 export function proposalStatusFromExchange(exchangeStatus: string, executedQty: string): { status: TradeStatus; reason?: string } {
   const executed = executedQty !== '' && !/^0(\.0+)?$/.test(executedQty);

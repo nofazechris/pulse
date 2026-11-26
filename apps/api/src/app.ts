@@ -5,7 +5,7 @@ import rateLimit from '@fastify/rate-limit';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import { and, eq, notExists, sql } from 'drizzle-orm';
 import {
-  addWatchlistSchema, agentMessageRequestSchema, approveTradeSchema, createMemorySchema, pairRequestSchema,
+  addWatchlistSchema, agentMessageRequestSchema, approveTradeSchema, createMemorySchema, createPlanSchema, pairRequestSchema,
   patchMemorySchema, prepareTradeSchema, type Diagnostics, type Health,
 } from '@pulse/shared';
 import { z } from 'zod';
@@ -34,6 +34,8 @@ export interface BuiltApp {
 export async function buildApp(env: Env, overrides: ServiceOverrides = {}): Promise<BuiltApp> {
   const app = Fastify({
     bodyLimit: 64 * 1024,
+    // Behind a host's proxy, rate limits must apply to the caller's address, not the proxy's (one hop).
+    ...(env.NODE_ENV === 'production' ? { trustProxy: (_address: string, hop: number) => hop < 1 } : {}),
     requestIdHeader: 'x-request-id',
     genReqId: () => randomUUID(),
     logger: {
@@ -48,7 +50,8 @@ export async function buildApp(env: Env, overrides: ServiceOverrides = {}): Prom
 
   await app.register(helmet);
   await app.register(cors, {
-    origin: env.CORS_ORIGIN,
+    // "*" is for a hosted backend serving the packaged app: auth is a bearer token, no cookies are used.
+    origin: env.CORS_ORIGIN.includes('*') ? '*' : env.CORS_ORIGIN,
     methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'Idempotency-Key', 'X-Request-Id'],
     exposedHeaders: ['X-Request-Id', 'Idempotent-Replay'],
@@ -210,6 +213,13 @@ export async function buildApp(env: Env, overrides: ServiceOverrides = {}): Prom
         return ok(req, { deleted: true });
       });
 
+      // ------------------------------------------------------------ trade plans (alerts + prepared orders; never auto-trade)
+      v1.get('/plans', protectedRoute, async (req) => ok(req, await services.plans.listArmed(uid(req))));
+      v1.post('/plans', protectedRoute, async (req) => ok(req, await services.plans.create(uid(req), createPlanSchema.parse(req.body))));
+      v1.delete('/plans/:id', protectedRoute, async (req) => ok(req, await services.plans.cancel(uid(req), { id: idParam.parse(req.params).id })));
+      v1.post('/plans/check', protectedRoute, async (req) =>
+        ok(req, await services.plans.check(uid(req), z.object({ sessionId: z.string().uuid() }).parse(req.body).sessionId)));
+
       // ------------------------------------------------------------ trading
       v1.post('/trades/prepare', protectedRoute, async (req) => ok(req, await services.trading.prepare(uid(req), prepareTradeSchema.parse(req.body))));
       v1.get('/trades/proposals/:id', protectedRoute, async (req) => ok(req, await services.trading.getProposal(uid(req), idParam.parse(req.params).id)));
@@ -239,6 +249,7 @@ export async function buildApp(env: Env, overrides: ServiceOverrides = {}): Prom
         const closed = await services.db.update(tradeProposals).set({ status: 'EXPIRED', failureReason: 'DEMO_RESET', updatedAt: new Date() })
           .where(and(eq(tradeProposals.userId, userId), eq(tradeProposals.status, 'PENDING_APPROVAL'))).returning({ id: tradeProposals.id });
         await services.db.delete(watchlists).where(eq(watchlists.userId, userId));
+        await services.plans.cancel(userId);
         const removed = await services.db.delete(agentSessions).where(and(
           eq(agentSessions.userId, userId),
           notExists(services.db.select({ one: sql`1` }).from(tradeProposals).where(eq(tradeProposals.sessionId, agentSessions.id))),

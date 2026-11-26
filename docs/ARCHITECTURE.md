@@ -9,7 +9,7 @@
                                       EvenHubAdapter / SimulatorAdapter|      |          |                |
                                                                    Agent   Trading     Market/Portfolio  Memory
                                                                    (intents,  (proposals, (Binance Spot    (Neon)
-                                                                    AI, STT)   approval,   Testnet only)
+                                                                    AI, STT)   approval,   on testnet)  
                                                                               execute)
                                                                        |          |           |
                                                                    LLM/STT      Neon       Binance Testnet
@@ -51,6 +51,12 @@ result   -> status derived ONLY from Binance's response; timeout/5xx => UNKNOWN 
 Status machine (backend-enforced): `PENDING_APPROVAL -> {APPROVED, REJECTED, EXPIRED}`, `APPROVED -> {SUBMITTING, EXPIRED, FAILED}`, `SUBMITTING -> {SUBMITTED, PARTIALLY_FILLED, FILLED, FAILED, UNKNOWN}`, `SUBMITTED -> {PARTIALLY_FILLED, FILLED, FAILED}`, `UNKNOWN -> {SUBMITTED, PARTIALLY_FILLED, FILLED, FAILED}`. The PRD's DRAFT/VALIDATING states occur inside one `prepare` call and are not persisted.
 
 Duplicate-order defences (layered): state-machine CAS, per-proposal unique `exchange_orders.proposal_id`, unique `client_order_id`, idempotency records (unique per user+key+operation), deterministic client order id per proposal.
+
+## Trade plans
+
+`PlanService` stores a condition and an optional action (a buy amount, a sell quantity or a share of the balance). A server watcher checks armed plans every 15 s (only querying while something is armed) and **only records** that a level was reached (`hit_at`, `hit_price`); it cannot fire, prepare or trade. G2 apps cannot run in the background, so delivery happens when the app polls `POST /plans/check` (every 7 s while open). A due plan is flipped `ARMED -> TRIGGERED` with a compare-and-set (never twice). If the condition still holds and it has an action, it goes through the *ordinary* `TradingService.prepare` with a note ("PLAN: BTC below 57,000 reached"), a share being sized from the balance at that moment; if the price has moved back, the wearer is told and nothing is prepared. Approval, hashing, idempotency and reconciliation are unchanged; the plan service has no path to `execute`. It holds back while another proposal awaits a decision, and the app never shows an alert while the wearer is speaking.
+
+Session P&L compares the current portfolio value with the value stored when the session started. Smart defaults fill only a missing **buy** amount (usual amount the user stated, else the last filled buy), shown on the approval screen.
 
 ## Neon and the HTTP driver
 

@@ -208,7 +208,7 @@ describe('voice state machine', () => {
     await c!.submitText('why is bitcoin moving');
     await settle();
     expect(c!.getState().currentScreen).toBe('insight');
-    expect(adapter.lastView?.body.join('\n')).toMatch(/FACT: .*\n?.*UNVERIFIED/s);
+    expect(adapter.lastView?.body.join('\n')).toMatch(/BTCUSDT 59,980\.00.*UNVERIFIED/s);
   });
 });
 
@@ -341,6 +341,68 @@ describe('trade approval safety on the glasses', () => {
     expect(c!.getState().currentScreen).toBe('home');
     expect(c!.getState().notice).toMatch(/expired/i);
     expect(api.approve).not.toHaveBeenCalled();
+  });
+});
+
+describe('recorded speech through the voice pipeline', () => {
+  it('shows listening, transcribes with the real STT call and sends it as voice, without opening the microphone', async () => {
+    vi.useRealTimers();
+    const { api } = await boot();
+    const done = c!.hearClip(pcm(100));
+    await settle();
+    expect(c!.getState().voiceState).toBe('LISTENING');
+    await done;
+    await settle();
+    expect(adapter.listenStarts).toBe(0);
+    expect(api.transcribe).toHaveBeenCalledOnce();
+    expect(api.message.mock.calls[0]![0]).toMatchObject({ text: 'show my portfolio', source: 'voice' });
+    expect(c!.getState().lastTranscript).toBe('show my portfolio');
+  });
+});
+
+describe('cancelling a resting order', () => {
+  const order = { ...executeResult().order!, status: 'NEW', orderType: 'LIMIT' as const, executedQuantity: '0', averagePrice: null };
+  const ask = () => makeApi({
+    message: vi.fn(async () => reply({ intent: 'CANCEL_ORDER', uiAction: { type: 'CONFIRM_CANCEL', order, price: '50000', openCount: 1 } })),
+    cancelOrder: vi.fn(async () => ({ ...order, status: 'CANCELED' })),
+  });
+  const shown = async () => {
+    const api = ask();
+    await boot(api);
+    await c!.submitText('cancel my order');
+    await settle();
+    return api;
+  };
+
+  it('shows the order with KEEP preselected and cancels nothing by itself', async () => {
+    const api = await shown();
+    expect(c!.getState()).toMatchObject({ currentScreen: 'cancel', cancelChoice: 'KEEP' });
+    expect(adapter.lastView?.body.join('\n')).toContain('> KEEP <');
+    expect(api.cancelOrder).not.toHaveBeenCalled();
+    await gesture('click');
+    expect(api.cancelOrder).not.toHaveBeenCalled();
+    expect(c!.getState()).toMatchObject({ currentScreen: 'home', notice: 'Order kept. Nothing was changed.' });
+  });
+  it('double-tap and hold keep the order', async () => {
+    for (const g of ['double_click', 'long_press'] as const) {
+      const api = await shown();
+      await gesture('swipe_down');
+      await gesture(g);
+      expect(api.cancelOrder).not.toHaveBeenCalled();
+      expect(c!.getState().currentScreen).toBe('home');
+      await c!.dispose();
+    }
+  });
+  it('only swipe to CANCEL IT plus a tap cancels, once, and shows the exchange status', async () => {
+    const api = await shown();
+    await gesture('swipe_down');
+    await gesture('click');
+    expect(api.cancelOrder).toHaveBeenCalledExactlyOnceWith(order.id);
+    expect(adapter.lastView?.header).toBe('ORDER CANCELLED  CONFIRMED');
+    expect(adapter.lastView?.body.join('\n')).toContain('BINANCE ORDER #123456');
+    await gesture('click');
+    expect(api.cancelOrder).toHaveBeenCalledOnce();
+    expect(c!.getState().currentScreen).toBe('home');
   });
 });
 

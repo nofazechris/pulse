@@ -21,7 +21,7 @@ const envSchema = z
     LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
     CORS_ORIGIN: z
       .string()
-      .default('http://localhost:5173')
+      .default('http://localhost:5180')
       .transform((v) => v.split(',').map((s) => s.trim()).filter(Boolean)),
 
     DATABASE_URL: optional.refine((v) => v === undefined || /^postgres(ql)?:\/\//.test(v), {
@@ -84,7 +84,8 @@ export type Env = z.infer<typeof envSchema>;
 
 /** Parse an env source. Error messages never include the offending values (they may be secrets). */
 export function parseEnv(source: Record<string, string | undefined>): Env {
-  const result = envSchema.safeParse(source);
+  // Hosting platforms announce the port to listen on as PORT.
+  const result = envSchema.safeParse(source.PORT && !source.API_PORT ? { ...source, API_PORT: source.PORT } : source);
   if (!result.success) {
     const problems = result.error.issues.map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`);
     throw new Error(`Invalid environment configuration:\n  ${problems.join('\n  ')}`);

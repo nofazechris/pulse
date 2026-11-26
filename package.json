@@ -15,8 +15,8 @@
     "dev": "node scripts/dev.mjs",
     "dev:api": "npm run dev -w @pulse/api",
     "dev:glasses": "npm run dev -w @pulse/glasses",
-    "simulator": "evenhub-simulator http://localhost:5173",
-    "simulator:auto": "evenhub-simulator http://localhost:5173 --automation-port 9898",
+    "simulator": "evenhub-simulator http://localhost:5180",
+    "simulator:auto": "evenhub-simulator http://localhost:5180 --automation-port 9898",
     "build": "npm run build -w @pulse/glasses && npm run typecheck -w @pulse/api",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "vitest run",
@@ -25,11 +25,12 @@
     "db:migrate": "npm run db:migrate -w @pulse/api",
     "db:studio": "npm run db:studio -w @pulse/api",
     "db:check": "npm run db:check -w @pulse/api",
-    "pack:ehpk": "npm run build && evenhub pack apps/glasses/app.json apps/glasses/dist -o pulse.ehpk",
+    "pack:ehpk": "node scripts/pack-ehpk.mjs",
     "db:latency": "npm run db:latency -w @pulse/api",
-    "demo": "evenhub-simulator \"http://localhost:5173/?autorun=1&countdown=5\"",
-    "demo:fast": "evenhub-simulator \"http://localhost:5173/?autorun=1&countdown=5&pace=fast\"",
-    "ai:check": "npm run ai:check -w @pulse/api"
+    "demo": "evenhub-simulator \"http://localhost:5180/?autorun=1&countdown=5\"",
+    "demo:fast": "evenhub-simulator \"http://localhost:5180/?autorun=1&countdown=5&pace=fast\"",
+    "ai:check": "npm run ai:check -w @pulse/api",
+    "demo:record": "evenhub-simulator \"http://localhost:5180/?autorun=1&countdown=8\" --automation-port 9898"
   },
   "devDependencies": {
     "@evenrealities/evenhub-cli": "0.2.0",

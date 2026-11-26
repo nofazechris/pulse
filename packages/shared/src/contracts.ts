@@ -202,6 +202,48 @@ export const executeResultSchema = z.object({
 });
 export type ExecuteResult = z.infer<typeof executeResultSchema>;
 
+// ---- trade plans ----
+export const tradePlanSchema = z.object({
+  id: z.string().uuid(),
+  symbol: z.string(),
+  direction: z.enum(['ABOVE', 'BELOW']),
+  triggerPrice: decimalString,
+  referencePrice: decimalString,
+  side: z.enum(['BUY', 'SELL']).nullable(),
+  quoteOrderQty: decimalString.nullable(),
+  quantity: decimalString.nullable(),
+  status: z.enum(['ARMED', 'TRIGGERED', 'CANCELLED', 'EXPIRED']),
+  createdAt: z.string(),
+  expiresAt: z.string(),
+  triggeredAt: z.string().nullable(),
+  observedPrice: decimalString.nullable(),
+  /** Share of the free balance to sell (0-1]. */
+  sellFraction: decimalString.nullable(),
+  /** When the server saw the level reached (it watches even while the app is closed). */
+  hitAt: z.string().nullable(),
+  hitPrice: decimalString.nullable(),
+});
+export type TradePlan = z.infer<typeof tradePlanSchema>;
+/** A fired plan. `proposal` still needs explicit approval like any other trade. */
+export const planAlertSchema = z.object({
+  plan: tradePlanSchema, proposal: tradeProposalSchema.nullable(), message: z.string(),
+  /** The short line for the lens when there is no order to show. */
+  note: z.string().optional(),
+});
+export type PlanAlert = z.infer<typeof planAlertSchema>;
+export const planCheckSchema = z.object({ alerts: z.array(planAlertSchema), armed: z.number() });
+export type PlanCheck = z.infer<typeof planCheckSchema>;
+export const createPlanSchema = z.object({
+  symbol: z.string().min(5).max(20),
+  direction: z.enum(['ABOVE', 'BELOW']),
+  price: decimalString.optional(),
+  percent: decimalString.optional(),
+  side: z.enum(['BUY', 'SELL']).optional(),
+  quoteOrderQty: decimalString.optional(),
+  quantity: decimalString.optional(),
+  sellFraction: decimalString.optional(),
+});
+
 // ---- memory ----
 export const memoryCategorySchema = z.enum([
   'explicit_preference', 'financial_goal', 'interaction_preference', 'session_summary', 'temporary_context',
@@ -234,6 +276,10 @@ export const intentSchema = z.enum([
   'PREPARE_TRADE', 'APPROVE_TRADE', 'REJECT_TRADE', 'GET_ORDER_STATUS', 'GET_HELP', 'UNKNOWN',
   // Additions beyond the PRD's minimum list, needed for Journey E (memory + ending a session).
   'SAVE_MEMORY', 'END_SESSION',
+  // Trade plans (alerts that arrive with the order prepared) and session profit and loss.
+  'CREATE_PLAN', 'GET_PLANS', 'CANCEL_PLAN', 'GET_SESSION_PNL',
+  // Resting orders: list them, and ask to cancel one (the glasses still need an explicit confirmation).
+  'GET_OPEN_ORDERS', 'CANCEL_ORDER',
 ]);
 export type Intent = z.infer<typeof intentSchema>;
 
@@ -262,6 +308,8 @@ export const agentReplySchema = z.object({
       z.object({ type: z.literal('REJECT_PROPOSAL'), proposalId: z.string().uuid() }),
       z.object({ type: z.literal('NAVIGATE'), screen: z.enum(['home', 'portfolio', 'market', 'watchlist', 'insight']) }),
       z.object({ type: z.literal('NONE') }),
+      /** Show one open order and ask the wearer to confirm cancelling it. Nothing is cancelled yet. */
+      z.object({ type: z.literal('CONFIRM_CANCEL'), order: exchangeOrderSchema, price: decimalString.nullable(), openCount: z.number() }),
     ])
     .optional(),
   data: z.record(z.string(), z.unknown()).optional(),

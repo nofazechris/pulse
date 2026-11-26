@@ -25,13 +25,15 @@ Auth: `Authorization: Bearer <token>` from `/auth/pair`. Tokens are opaque, shor
 | `POST /agent/message` | yes (60/min) | `{sessionId, text, source:"voice"|"text", displayedProposalId?}` -> `AgentReply` `{intent, response, sections[FACT|AI|UNVERIFIED|INFO], evidence[], requiresClarification, source, uiAction?}` |
 | `POST /agent/transcribe` | yes | Raw 16 kHz 16-bit mono PCM (`application/octet-stream`, <= 20 s) -> `{text, provider}`; `501 STT_UNAVAILABLE` if no provider |
 | `GET/POST /memory`, `PATCH/DELETE /memory/:id` | yes | Review, create, correct, delete own memories |
+| `GET /plans`, `POST /plans`, `DELETE /plans/:id` | yes | Armed trade plans: `{symbol, direction ABOVE|BELOW, price? | percent?, side?, quoteOrderQty? | quantity?}`; max 5 armed, 24 h life |
+| `POST /plans/check` `{sessionId}` | yes | Delivers due plans: level reached now, or recorded earlier by the server watcher (every 15 s). The app calls it every 7 s while open. Fires at most one per call; returns `{alerts:[{plan, proposal|null, message, note}], armed}`. A proposal is prepared only if the condition still holds. The proposal needs the normal approval |
 | `POST /trades/prepare` | yes | `{sessionId, symbol, side, orderType, quantity? | quoteOrderQty?, price?}` -> `TradeProposal` (`PENDING_APPROVAL`, `proposalHash`, `expiresAt`, warnings) |
 | `GET /trades/proposals/:id` | yes | Proposal (lazily expires; reconciles `UNKNOWN`) |
 | `POST /trades/proposals/:id/approve` | yes | `{sessionId, proposalHash, method}` |
 | `POST /trades/proposals/:id/reject` | yes | `{sessionId?}` |
 | `POST /trades/proposals/:id/execute` | yes | **No body.** Header `Idempotency-Key` required. Returns `{proposal, order, message}`; `Idempotent-Replay: true` on a replay |
 | `GET /trades/orders`, `GET /trades/orders/:id` | yes | Orders; GET refreshes open/uncertain ones from Binance |
-| `POST /trades/orders/:id/cancel` | yes | Explicit, id-addressed; verified with the exchange |
+| `POST /trades/orders/:id/cancel` | yes | Explicit, id-addressed; verified with the exchange. The glasses call it only after the wearer confirms the exact order on the lens |
 | `POST /demo/reset` | yes (not in production) | Closes pending proposals, resets watchlist, removes empty sessions; keeps exchange orders |
 
 ## Error codes worth knowing
@@ -40,4 +42,4 @@ Auth: `Authorization: Bearer <token>` from `/auth/pair`. Tokens are opaque, shor
 
 ## Intents
 
-`START_SESSION, GET_PORTFOLIO, GET_BALANCE, GET_MARKET_PRICE, GET_MARKET_CHANGE, GET_WATCHLIST, ADD_WATCHLIST_ASSET, REMOVE_WATCHLIST_ASSET, ASK_FINANCIAL_QUESTION, PREPARE_TRADE, APPROVE_TRADE, REJECT_TRADE, GET_ORDER_STATUS, GET_HELP, UNKNOWN`, plus `SAVE_MEMORY` and `END_SESSION` (needed for the persistence journey). Cancelling an *exchange* order is HTTP-only (never inferred from speech).
+`START_SESSION, GET_PORTFOLIO, GET_BALANCE, GET_MARKET_PRICE, GET_MARKET_CHANGE, GET_WATCHLIST, ADD_WATCHLIST_ASSET, REMOVE_WATCHLIST_ASSET, ASK_FINANCIAL_QUESTION, PREPARE_TRADE, APPROVE_TRADE, REJECT_TRADE, GET_ORDER_STATUS, GET_HELP, UNKNOWN`, plus `SAVE_MEMORY`, `END_SESSION`, `CREATE_PLAN`, `GET_PLANS`, `CANCEL_PLAN`, `GET_SESSION_PNL`, `GET_OPEN_ORDERS` and `CANCEL_ORDER`. `CANCEL_ORDER` never cancels: it returns `uiAction: CONFIRM_CANCEL` with one open order, and only the deterministic parser can produce it (never the model). "Sell half / a quarter / all / N percent" is turned into an exact quantity by the backend before approval.

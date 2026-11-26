@@ -3,6 +3,7 @@ import { App } from './App';
 import { EvenHubAdapter } from './sdk/EvenHubAdapter';
 import { SimulatorAdapter } from './sdk/SimulatorAdapter';
 import type { GlassesAdapter } from './sdk/types';
+import { PracticeApi } from './practice/api';
 import { ApiClient } from './services/api';
 import { createTokenStore } from './services/tokenStore';
 import { PulseController } from './state/controller';
@@ -31,8 +32,10 @@ async function boot() {
 
   const controller = new PulseController({
     adapter, api, tokens, autoPairCode: AUTO_PAIR, deviceType: adapter.kind === 'even-hub' ? 'simulator' : 'web',
+    // Practice keeps its token in memory only, so the real session is never overwritten.
+    practice: () => ({ api: new PracticeApi(), tokens: createTokenStore(null) }),
   });
-  createRoot(document.getElementById('root')!).render(<App controller={controller} api={api} apiUrl={API_URL} adapterKind={adapter.kind} bridgeNote={bridgeNote} driver={createControllerDriver(controller, api)} />);
+  createRoot(document.getElementById('root')!).render(<App controller={controller} apiUrl={API_URL} adapterKind={adapter.kind} bridgeNote={bridgeNote} driver={createControllerDriver(controller, api)} />);
   await controller.start();
 }
 

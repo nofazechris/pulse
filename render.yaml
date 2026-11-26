@@ -1,0 +1,39 @@
+# Render blueprint for the PULSE backend (optional hosting). Secrets are typed into the Render dashboard
+# (sync: false) and are never stored in this repository. See docs/DEPLOY.md.
+services:
+  - type: web
+    name: pulse-api
+    runtime: node
+    plan: free
+    region: frankfurt
+    buildCommand: npm ci --include=dev
+    startCommand: npm run start -w @pulse/api
+    healthCheckPath: /api/v1/health
+    envVars:
+      - key: NODE_VERSION
+        value: "24"
+      - key: NODE_ENV
+        value: production
+      # The packaged app's WebView origin is not documented; requests carry a bearer token, never cookies.
+      - key: CORS_ORIGIN
+        value: "*"
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: DATABASE_URL
+        sync: false
+      - key: BINANCE_API_KEY
+        sync: false
+      - key: BINANCE_API_SECRET
+        sync: false
+      - key: PAIRING_CODE
+        sync: false
+      - key: AI_PROVIDER
+        value: openai
+      - key: AI_MODEL
+        value: gpt-6-luna
+      - key: AI_API_KEY
+        sync: false
+      - key: STT_PROVIDER
+        value: openai
+      - key: STT_MODEL
+        value: gpt-transcribe

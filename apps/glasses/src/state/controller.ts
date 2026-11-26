@@ -1,20 +1,27 @@
-import type { AgentReply, Memory, TradeProposal } from '@pulse/shared';
+import type { AgentReply, Memory, PlanAlert, TradeProposal } from '@pulse/shared';
 import { renderScreen } from '../screens';
 import type { AudioInput, GlassesAdapter, GlassesGesture, GlassesView } from '../sdk/types';
-import { ApiClient, ApiRequestError } from '../services/api';
+import { PRACTICE_REQUESTS } from '../practice/requests';
+import { ApiRequestError, type PulseApi } from '../services/api';
 import type { TokenStore } from '../services/tokenStore';
-import { initialState, type PulseState, type ScreenId } from './types';
+import { initialState, type PendingCancel, type PulseState, type ScreenId } from './types';
 
 export const LISTEN_MAX_MS = 15_000;
 export const PROCESS_TIMEOUT_MS = 30_000;
 export const GESTURE_DEDUPE_MS = 180;
+/** How often armed trade plans are checked while the app is open. */
+export const PLAN_POLL_MS = 7_000;
 const CYCLE: ScreenId[] = ['home', 'portfolio', 'market', 'watchlist'];
+/** An alert may only appear over calm screens: never while the wearer is speaking, deciding or in an error. */
+const ALERTABLE: ReadonlySet<ScreenId> = new Set(['home', 'portfolio', 'market', 'watchlist', 'insight', 'result']);
 const MIN_PCM_BYTES = 3200; // 100 ms of 16 kHz 16-bit mono
 
 export interface ControllerOptions {
   adapter: GlassesAdapter;
-  api: ApiClient;
+  api: PulseApi;
   tokens: TokenStore;
+  /** Creates the no-server practice backend; omit to leave practice mode unavailable. */
+  practice?: () => { api: PulseApi; tokens: TokenStore };
   /** Dev-only convenience (VITE_DEMO_PAIRING_CODE): pair automatically. Never set for production builds. */
   autoPairCode?: string | undefined;
   deviceType?: 'simulator' | 'g2-glasses' | 'web';
@@ -45,9 +52,37 @@ export class PulseController {
   private retry: { p: TradeProposal; method: 'glasses_gesture' | 'voice' } | null = null;
   readonly log: string[] = [];
   private readonly now: () => number;
+  private lastPlanPoll = 0;
+  private polling = false;
+  private queuedAlert: PlanAlert | null = null;
+
+  /** Set once, by an explicit choice: the real backend is not touched afterwards. */
+  private practising: { api: PulseApi; tokens: TokenStore } | null = null;
+  private generation = 0;
 
   constructor(private readonly o: ControllerOptions) {
     this.now = o.clock ?? Date.now;
+    this.state = { ...this.state, canPractice: o.practice !== undefined };
+  }
+
+  get api(): PulseApi {
+    return this.practising?.api ?? this.o.api;
+  }
+  private get tokens(): TokenStore {
+    return this.practising?.tokens ?? this.o.tokens;
+  }
+
+  /** Switches to the practice backend (sample prices, simulated orders, labelled DEMO). */
+  async startPractice(): Promise<void> {
+    if (!this.o.practice || this.practising) return;
+    this.practising = this.o.practice();
+    this.abort?.abort();
+    this.clearTimers();
+    this.busy = false;
+    this.retry = null;
+    this.queuedAlert = null;
+    this.set({ ...initialState, practice: true, canPractice: true, mode: 'DEMO' });
+    await this.connect();
   }
 
   // ------------------------------------------------------------- store plumbing
@@ -96,6 +131,7 @@ export class PulseController {
     this.unsubs.push(this.o.adapter.onGesture((g) => this.onGesture(g)), this.o.adapter.onAudio((a) => this.onAudio(a)));
     this.tick = setInterval(() => {
       if (this.state.currentScreen === 'proposal') this.onProposalTick();
+      void this.pollPlans();
     }, 1000);
     await this.connect();
   }
@@ -110,11 +146,14 @@ export class PulseController {
   }
 
   async connect(): Promise<void> {
+    const mine = ++this.generation;
     this.set({ connectionStatus: 'initializing', currentScreen: 'connection', lastError: null });
     try {
-      const h = await this.o.api.health();
+      const h = await this.api.health();
+      if (mine !== this.generation) return; // a newer connection (practice mode) took over
       this.set({ backend: 'ok', exchange: h.exchange === 'available' ? 'ok' : 'down', connectionStatus: h.exchange === 'available' ? 'initializing' : 'exchange_unavailable' });
     } catch {
+      if (mine !== this.generation) return;
       this.set({ backend: 'down', connectionStatus: 'offline', lastError: 'Cannot reach the PULSE backend.' });
       return;
     }
@@ -123,10 +162,10 @@ export class PulseController {
   }
 
   private async ensureAuth(): Promise<boolean> {
-    const stored = this.o.tokens.get();
+    const stored = this.tokens.get();
     if (stored) {
       try {
-        await this.o.api.session();
+        await this.api.session();
         this.set({ authenticationStatus: 'authenticated' });
         return true;
       } catch (err) {
@@ -134,10 +173,11 @@ export class PulseController {
           this.set({ connectionStatus: 'offline', lastError: 'Cannot verify the session.' });
           return false;
         }
-        this.o.tokens.clear();
+        this.tokens.clear();
       }
     }
-    if (this.o.autoPairCode) return this.pair(this.o.autoPairCode, false);
+    const code = this.practising ? 'practice' : this.o.autoPairCode;
+    if (code) return this.pair(code, false);
     this.set({ authenticationStatus: 'unauthenticated', connectionStatus: 'auth_required', currentScreen: 'connection' });
     return false;
   }
@@ -146,8 +186,8 @@ export class PulseController {
   async pair(code: string, startAfter = true): Promise<boolean> {
     this.set({ authenticationStatus: 'pairing', lastError: null });
     try {
-      const s = await this.o.api.pair(code, this.o.deviceType ?? 'simulator');
-      this.o.tokens.set({ token: s.accessToken, expiresAt: s.expiresAt });
+      const s = await this.api.pair(code, this.o.deviceType ?? 'simulator');
+      this.tokens.set({ token: s.accessToken, expiresAt: s.expiresAt });
       this.set({ authenticationStatus: 'authenticated' });
       this.note('paired');
       if (startAfter && !this.state.activeSessionId) void this.beginSession();
@@ -160,10 +200,11 @@ export class PulseController {
 
   private async beginSession(showGreeting = false): Promise<void> {
     try {
-      const { session, greeting } = await this.o.api.startSession();
+      const { session, greeting } = await this.api.startSession();
       const mode = (greeting.data as { mode?: string } | undefined)?.mode === 'DEMO' ? 'DEMO' : 'LIVE';
       this.set({ activeSessionId: session.id, lastReply: greeting, mode, connectionStatus: 'connected' });
       await this.loadHome();
+      await this.refreshPlanCount();
       this.set({ currentScreen: showGreeting ? 'insight' : 'home', scroll: 0 });
       this.note('session started');
     } catch (err) {
@@ -171,10 +212,56 @@ export class PulseController {
     }
   }
 
+  // ------------------------------------------------------------- trade plans
+  private async refreshPlanCount() {
+    try {
+      this.set({ armedPlans: (await this.api.plans()).length });
+    } catch {
+      // Plans are an extra: never block the session because the count is unavailable.
+    }
+  }
+
+  private canShowAlert(): boolean {
+    return this.state.voiceState === 'IDLE' && !this.busy && ALERTABLE.has(this.state.currentScreen);
+  }
+
+  /** Called every second by the tick; checks at most every PLAN_POLL_MS, and only while something is armed. */
+  async pollPlans(force = false): Promise<void> {
+    if (this.queuedAlert && this.canShowAlert()) return this.showAlert(this.queuedAlert);
+    const sessionId = this.state.activeSessionId;
+    if (!sessionId || this.polling || this.state.armedPlans === 0 || !this.canShowAlert()) return;
+    if (!force && this.now() - this.lastPlanPoll < PLAN_POLL_MS) return;
+    this.polling = true;
+    this.lastPlanPoll = this.now();
+    try {
+      const r = await this.api.checkPlans(sessionId);
+      if (sessionId !== this.state.activeSessionId) return;
+      this.set({ armedPlans: r.armed });
+      const alert = r.alerts[0];
+      if (!alert) return;
+      this.note('plan fired');
+      if (this.canShowAlert()) this.showAlert(alert);
+      else this.queuedAlert = alert; // the wearer got busy meanwhile: show it when they are free
+    } catch (err) {
+      this.note(`plan check failed: ${err instanceof Error ? err.message : 'unknown'}`);
+    } finally {
+      this.polling = false;
+    }
+  }
+
+  private showAlert(alert: PlanAlert) {
+    this.queuedAlert = null;
+    // With an order attached it lands on the normal approval screen (REJECT preselected); otherwise it is just news.
+    if (alert.proposal) {
+      this.showProposal(alert.proposal);
+      this.set({ activeAlert: alert });
+    } else this.set({ activeAlert: alert, currentScreen: 'alert', scroll: 0 });
+  }
+
   // ------------------------------------------------------------- data loading (stale-response safe)
   private async loadHome() {
     const mine = ++this.seq.data;
-    const [p, w] = await Promise.allSettled([this.o.api.portfolio(), this.o.api.watchlist()]);
+    const [p, w] = await Promise.allSettled([this.api.portfolio(), this.api.watchlist()]);
     if (mine !== this.seq.data) return; // a newer request superseded this one
     this.set({
       portfolio: p.status === 'fulfilled' ? p.value : this.state.portfolio,
@@ -187,7 +274,7 @@ export class PulseController {
     const mine = ++this.seq.data;
     this.set({ marketSymbol: symbol });
     try {
-      const m = await this.o.api.stats(symbol);
+      const m = await this.api.stats(symbol);
       if (mine === this.seq.data) this.set({ market: m });
     } catch (err) {
       if (mine === this.seq.data) this.fail(err);
@@ -231,7 +318,14 @@ export class PulseController {
     switch (s.currentScreen) {
       case 'connection':
         if (g === 'click') await this.connect();
+        if (g === 'double_click') await this.startPractice();
         return;
+      case 'try': {
+        const n = PRACTICE_REQUESTS.length;
+        if (g === 'swipe_down' || g === 'swipe_up') return this.set({ listIndex: (s.listIndex + (g === 'swipe_down' ? 1 : -1) + n) % n });
+        if (g === 'click') return this.submitText(PRACTICE_REQUESTS[s.listIndex] ?? PRACTICE_REQUESTS[0]!);
+        return this.enter('home');
+      }
       case 'error':
         if (g === 'click' && this.retry) {
           const r = this.retry;
@@ -242,7 +336,10 @@ export class PulseController {
         return;
       case 'proposal':
         return this.proposalGesture(g);
+      case 'cancel':
+        return this.cancelGesture(g);
       case 'result':
+      case 'alert':
         if (g === 'click' || g === 'long_press') return this.enter('home');
         if (g === 'double_click') return this.startListening();
         return;
@@ -315,13 +412,13 @@ export class PulseController {
   }
 
   private showProposal(p: TradeProposal, notice?: string) {
-    this.set({ activeProposal: p, approvalChoice: 'REJECT', currentScreen: 'proposal', voiceState: 'AWAITING_APPROVAL', notice: notice ?? null, scroll: 0 });
+    this.set({ activeAlert: null, activeProposal: p, approvalChoice: 'REJECT', currentScreen: 'proposal', voiceState: 'AWAITING_APPROVAL', notice: notice ?? null, scroll: 0 });
   }
 
   private async rejectProposal(p: TradeProposal) {
     this.busy = true;
     try {
-      await this.o.api.reject(p.id, p.sessionId);
+      await this.api.reject(p.id, p.sessionId);
       this.set({ activeProposal: null, voiceState: 'IDLE', currentScreen: 'home', notice: 'Proposal cancelled. Nothing was sent.' });
     } catch (err) {
       this.fail(err);
@@ -337,12 +434,12 @@ export class PulseController {
     let approved = alreadyApproved;
     try {
       if (!approved) {
-        await this.o.api.approve(p.id, { sessionId: p.sessionId, proposalHash: p.proposalHash, method });
+        await this.api.approve(p.id, { sessionId: p.sessionId, proposalHash: p.proposalHash, method });
         approved = true;
       }
-      const key = this.idempotencyKeys.get(p.id) ?? this.o.api.newIdempotencyKey();
+      const key = this.idempotencyKeys.get(p.id) ?? this.api.newIdempotencyKey();
       this.idempotencyKeys.set(p.id, key); // a retry of the same proposal reuses the key => no duplicate order
-      const result = await this.o.api.execute(p.id, key);
+      const result = await this.api.execute(p.id, key);
       this.retry = null;
       this.set({ lastResult: result, activeProposal: null, currentScreen: 'result', voiceState: 'IDLE', retryOrder: false });
       void this.loadHome();
@@ -365,6 +462,36 @@ export class PulseController {
     }
   }
 
+  // ------------------------------------------------------------- cancelling a resting order
+  /** KEEP is preselected; only an explicit CANCEL selection plus a tap cancels. */
+  private async cancelGesture(g: GlassesGesture): Promise<void> {
+    const c = this.state.pendingCancel;
+    if (this.busy) return;
+    if (!c || c.done) {
+      if (g === 'double_click') return this.startListening();
+      return this.enter('home');
+    }
+    if (g === 'swipe_up') return this.set({ cancelChoice: 'KEEP' });
+    if (g === 'swipe_down') return this.set({ cancelChoice: 'CANCEL' });
+    if (g === 'click' && this.state.cancelChoice === 'CANCEL') return this.cancelShownOrder(c);
+    this.set({ pendingCancel: null, currentScreen: 'home', notice: 'Order kept. Nothing was changed.' });
+  }
+
+  private async cancelShownOrder(c: PendingCancel) {
+    this.busy = true;
+    this.set({ voiceState: 'PROCESSING' });
+    try {
+      const order = await this.api.cancelOrder(c.order.id);
+      this.set({ pendingCancel: { ...c, order, done: true }, voiceState: 'IDLE' });
+      void this.loadHome();
+    } catch (err) {
+      this.set({ pendingCancel: null });
+      this.fail(err); // e.g. it filled in the meantime: the message says so
+    } finally {
+      this.busy = false;
+    }
+  }
+
   // ------------------------------------------------------------- voice state machine
   private clearTimers() {
     if (this.listenTimer) clearTimeout(this.listenTimer);
@@ -374,6 +501,8 @@ export class PulseController {
 
   async startListening(): Promise<void> {
     if (this.busy || this.state.voiceState !== 'IDLE') return;
+    // No speech service in practice mode: double-tap offers ready-made requests instead.
+    if (this.practising) return this.set({ currentScreen: 'try', listIndex: 0, notice: null });
     this.audio = [];
     try {
       await this.o.adapter.startListening();
@@ -403,16 +532,33 @@ export class PulseController {
     let off = 0;
     for (const c of this.audio) { pcm.set(c, off); off += c.length; }
     this.audio = [];
+    await this.transcribeAndSend(pcm);
+  }
+
+  /** Speech-to-text, then the same message path as typed text. */
+  private async transcribeAndSend(pcm: Uint8Array): Promise<void> {
     this.beginProcessing();
     const ctl = this.abort!;
     try {
-      const t = await this.o.api.transcribe(pcm, ctl.signal);
+      const t = await this.api.transcribe(pcm, ctl.signal);
       this.set({ lastTranscript: t.text });
       await this.runMessage(t.text, 'voice', ctl);
     } catch (err) {
       if (ctl.signal.aborted) return;
       this.voiceFail(err);
     }
+  }
+
+  /**
+   * Plays a recorded 16 kHz PCM clip through the voice pipeline (demo autopilot): the listening screen for the
+   * clip's duration, then the real speech-to-text and the normal message path. The microphone stays closed.
+   */
+  async hearClip(pcm: Uint8Array): Promise<void> {
+    if (this.busy || this.state.voiceState !== 'IDLE') return;
+    this.set({ voiceState: 'LISTENING', lastError: null, lastTranscript: null });
+    await new Promise((r) => setTimeout(r, Math.round(pcm.length / 32) + 300));
+    if (this.getState().voiceState !== 'LISTENING') return; // cancelled meanwhile
+    await this.transcribeAndSend(pcm);
   }
 
   private cancelVoice() {
@@ -469,7 +615,7 @@ export class PulseController {
     if (!sessionId) throw new ApiRequestError(0, 'NO_SESSION', 'No active session yet.');
     const mine = ++this.seq.message;
     const displayed = this.state.currentScreen === 'proposal' ? this.state.activeProposal : null;
-    const reply = await this.o.api.message({ sessionId, text, source, ...(displayed ? { displayedProposalId: displayed.id } : {}) }, ctl.signal);
+    const reply = await this.api.message({ sessionId, text, source, ...(displayed ? { displayedProposalId: displayed.id } : {}) }, ctl.signal);
     if (mine !== this.seq.message || ctl.signal.aborted) return; // stale
     this.clearTimers();
     this.set({ voiceState: 'RESPONDING', lastReply: reply, lastError: null });
@@ -478,6 +624,11 @@ export class PulseController {
 
   private async applyReply(reply: AgentReply, displayed: TradeProposal | null) {
     const a = reply.uiAction;
+    if (reply.intent === 'CREATE_PLAN' || reply.intent === 'CANCEL_PLAN') {
+      // Give the wearer a moment to read the confirmation before the first check can fire.
+      this.lastPlanPoll = this.now();
+      void this.refreshPlanCount();
+    }
     if (a?.type === 'SHOW_PROPOSAL') return this.showProposal(a.proposal);
     if (a?.type === 'APPROVE_PROPOSAL') {
       // Voice only TRIGGERS approval of the proposal that is on screen; the client's displayed hash is what gets approved.
@@ -491,6 +642,12 @@ export class PulseController {
         ? { voiceState: 'AWAITING_APPROVAL', currentScreen: 'proposal', notice: 'Approval not matched. Review and confirm.' }
         : { voiceState: 'IDLE', currentScreen: 'insight', scroll: 0 });
     }
+    if (a?.type === 'CONFIRM_CANCEL') {
+      return this.set({
+        pendingCancel: { order: a.order, price: a.price, openCount: a.openCount, done: false }, cancelChoice: 'KEEP',
+        activeProposal: null, currentScreen: 'cancel', voiceState: 'IDLE', notice: null, scroll: 0,
+      });
+    }
     if (a?.type === 'REJECT_PROPOSAL') {
       return this.set({ activeProposal: null, voiceState: 'IDLE', currentScreen: 'home', notice: 'Proposal cancelled. Nothing was sent.' });
     }
@@ -500,7 +657,12 @@ export class PulseController {
     // Data answers show their data screen; a balance answer is a sentence, so it stays on the insight screen.
     if (a?.type === 'NAVIGATE' && a.screen !== 'insight' && reply.intent !== 'GET_BALANCE') {
       const sym = (reply.data as { symbol?: string } | undefined)?.symbol;
-      if (a.screen === 'market' && sym) await this.loadMarket(sym);
+      if (a.screen === 'market' && sym) {
+        await this.loadMarket(sym); // one fetch; stay on the thinking screen until the right asset is here
+        if (this.state.currentScreen === 'error') return;
+        this.set({ currentScreen: 'market', listIndex: 0, scroll: 0, notice: null, retryOrder: false, voiceState: 'IDLE' });
+        return;
+      }
       await this.enter(a.screen);
       this.set({ voiceState: 'IDLE' });
       return;
@@ -515,7 +677,7 @@ export class PulseController {
         ? err.status === 401 ? 'Session expired. Pair again.' : err.message
         : err instanceof Error ? err.message : 'Something went wrong.';
     if (err instanceof ApiRequestError && err.status === 401) {
-      this.o.tokens.clear();
+      this.tokens.clear();
       this.set({ authenticationStatus: 'unauthenticated', connectionStatus: 'auth_required', currentScreen: 'connection', lastError: message, voiceState: 'IDLE' });
       return;
     }
@@ -526,7 +688,7 @@ export class PulseController {
   async endSession(): Promise<void> {
     const id = this.state.activeSessionId;
     if (!id) return;
-    await this.o.api.endSession(id);
+    await this.api.endSession(id);
     this.set({ activeSessionId: null });
   }
 
@@ -536,6 +698,6 @@ export class PulseController {
   }
 
   async loadMemories(): Promise<Memory[]> {
-    return this.o.api.memories();
+    return this.api.memories();
   }
 }
