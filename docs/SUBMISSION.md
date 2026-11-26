@@ -6,7 +6,7 @@ Deadline: **Sunday Nov 29, 2026, 23:59 Dubai** = **20:59 UTC+1** (the page's own
 
 | Item | Required | Status |
 |---|---|---|
-| Public GitHub / GitLab / Bitbucket repository with a setup README | Yes | README ready; repository to be created and pushed |
+| Public GitHub / GitLab / Bitbucket repository with a setup README | Yes | Published: <https://github.com/nofazechris/pulse> |
 | Demo video, up to 3 minutes, simulator or G2 | Yes | `demo-video/pulse-demo.mp4` (2:56); upload and paste the link |
 | Short description: problem, who it is for, how it works, track | Yes | Below |
 | Feature requests (up to 5) | Optional | Below |
@@ -50,7 +50,7 @@ Your financial world, at a glance.
 
 ## Steps
 
-1. Create an empty **public** repository and push this project (no `.env` files are tracked).
+1. Repository link to paste: <https://github.com/nofazechris/pulse>
 2. Upload the video (YouTube, public or unlisted) and open the link in a private window to check it plays.
 3. On the hackathon page choose **Submit Build**, paste the fields, add both links, attach `pulse.ehpk` if wanted.
 4. Reopen the submission and check every link.

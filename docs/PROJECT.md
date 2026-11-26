@@ -165,4 +165,4 @@ The 2 s price cache could hide a price jump just before execution (proposals and
 1. Pick/confirm the package id; `evenhub login` + `pack --check` if you want a listing.
 2. Ask the organisers the LLM question ([HACKATHON_COMPLIANCE](HACKATHON_COMPLIANCE.md)); optionally add LLM/STT keys and test them.
 3. Optionally deploy the API (Render Ohio recommended) and put its HTTPS origin in `apps/glasses/app.json`.
-4. Record the 3-minute video ([DEMO_SCRIPT](DEMO_SCRIPT.md)); push the repo public after a secret scan; submit before **Nov 29, 23:59 Dubai (19:59 UTC)**.
+4. Upload the recorded video (see [DEMO_SCRIPT](DEMO_SCRIPT.md)); the repository is public at <https://github.com/nofazechris/pulse>; submit before **Nov 29, 23:59 Dubai (19:59 UTC)**.
