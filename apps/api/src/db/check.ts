@@ -10,7 +10,7 @@ async function main() {
   if (!env.DATABASE_URL) {
     console.error(
       'DATABASE_URL is not set.\n' +
-        '  1. Copy apps/api/.env.example to apps/api/.env\n' +
+        '  1. Create apps/api/.env (template in README.md)\n' +
         '  2. Paste your Neon pooled connection string after DATABASE_URL=\n' +
         '     (Neon Console -> Connect -> choose branch/role/database)\n' +
         '  3. Re-run: npm run db:check',

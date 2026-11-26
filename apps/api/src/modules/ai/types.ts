@@ -30,17 +30,17 @@ export const aiResponseSchema = z.object({
   facts: z.array(z.string().max(220)).max(5).default([]),
   interpretation: z.string().max(320).optional(),
   unverified: z.string().max(320).optional(),
-  evidence: z
-    .array(z.object({ type: z.string().max(30), reference: z.string().max(60), value: z.string().max(60).optional(), timestamp: z.string().max(40).optional() }))
-    .max(8)
-    .default([]),
+  // Only the REFERENCE is read from the model. Type, value and timestamp are filled in by the backend from its
+  // own verified context (see validateAiResponse), so whatever the model writes there is ignored.
+  evidence: z.array(z.object({ reference: z.string().max(60) })).max(8).default([]),
   confidence: z.number().min(0).max(1).optional(),
   requiresClarification: z.boolean().default(false),
   action: z
     .object({ type: z.enum(['PREPARE_TRADE', 'NONE']), parameters: z.record(z.string(), z.unknown()).optional() })
     .optional(),
 });
-export type AIResponse = z.infer<typeof aiResponseSchema>;
+export interface Evidence { type: string; reference: string; value?: string | undefined; timestamp?: string | undefined }
+export type AIResponse = Omit<z.infer<typeof aiResponseSchema>, 'evidence'> & { evidence: Evidence[] };
 export type InsightResult = AIResponse;
 
 export const aiIntentSchema = z.object({

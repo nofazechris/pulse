@@ -11,7 +11,8 @@
     "db:migrate": "drizzle-kit migrate",
     "db:check": "tsx src/db/check.ts",
     "db:studio": "drizzle-kit studio",
-    "db:latency": "tsx src/db/check.ts --latency"
+    "db:latency": "tsx src/db/check.ts --latency",
+    "ai:check": "tsx src/ai-check.ts"
   },
   "dependencies": {
     "@fastify/cors": "11.4.3",

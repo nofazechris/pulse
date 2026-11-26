@@ -44,17 +44,19 @@ export class UnavailableSttProvider implements SpeechRecognitionProvider {
   }
 }
 
-/** Whisper-compatible `/audio/transcriptions` endpoint (OpenAI or any compatible server). */
+export const DEFAULT_STT_MODEL = 'gpt-transcribe';
+
+/** OpenAI-style `/audio/transcriptions` endpoint (OpenAI or any compatible server). */
 export class WhisperCompatibleProvider implements SpeechRecognitionProvider {
   readonly name = 'openai';
-  constructor(private readonly key: string, private readonly baseUrl: string, private readonly model = 'whisper-1') {}
+  constructor(private readonly key: string, private readonly baseUrl: string, private readonly model: string = DEFAULT_STT_MODEL) {}
   isAvailable(): boolean {
     return true;
   }
   async transcribe(audio: AudioInput): Promise<TranscriptionResult> {
     const form = new FormData();
     form.set('model', this.model);
-    form.set('language', 'en');
+    if (this.model.startsWith('whisper')) form.set('language', 'en'); // newer models auto-detect
     form.set('file', new Blob([new Uint8Array(pcmToWav(audio.pcm, audio.sampleRate))], { type: 'audio/wav' }), 'speech.wav');
     let res: Response;
     try {
@@ -64,7 +66,7 @@ export class WhisperCompatibleProvider implements SpeechRecognitionProvider {
     } catch {
       throw new AppError(502, 'STT_FAILED', 'Speech recognition is unavailable right now.');
     }
-    if (!res.ok) throw new AppError(502, 'STT_FAILED', 'Speech recognition failed.');
+    if (!res.ok) throw new AppError(502, 'STT_FAILED', res.status === 401 || res.status === 403 ? 'Speech recognition key was rejected.' : 'Speech recognition failed.', { status: res.status });
     const body = (await res.json()) as { text?: string };
     const text = (body.text ?? '').trim();
     if (!text) throw new AppError(422, 'STT_EMPTY', 'I did not catch that.');
@@ -72,9 +74,15 @@ export class WhisperCompatibleProvider implements SpeechRecognitionProvider {
   }
 }
 
-export function createSttProvider(env: Pick<Env, 'STT_PROVIDER' | 'STT_API_KEY' | 'STT_BASE_URL'>): SpeechRecognitionProvider {
-  if (env.STT_PROVIDER === 'openai' && env.STT_API_KEY) {
-    return new WhisperCompatibleProvider(env.STT_API_KEY, env.STT_BASE_URL ?? 'https://api.openai.com/v1');
+type SttEnv = Pick<Env, 'STT_PROVIDER' | 'STT_API_KEY' | 'STT_BASE_URL' | 'STT_MODEL' | 'AI_PROVIDER' | 'AI_API_KEY' | 'AI_BASE_URL'>;
+
+export function createSttProvider(env: SttEnv): SpeechRecognitionProvider {
+  // One OpenAI key can serve both. It is reused ONLY when both services point at OpenAI itself,
+  // so a key is never sent to a host it was not issued for.
+  const shared = env.AI_PROVIDER === 'openai' && !env.AI_BASE_URL && !env.STT_BASE_URL ? env.AI_API_KEY : undefined;
+  const key = env.STT_API_KEY ?? shared;
+  if (env.STT_PROVIDER === 'openai' && key) {
+    return new WhisperCompatibleProvider(key, env.STT_BASE_URL ?? 'https://api.openai.com/v1', env.STT_MODEL ?? DEFAULT_STT_MODEL);
   }
   return new UnavailableSttProvider();
 }

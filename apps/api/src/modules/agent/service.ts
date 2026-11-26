@@ -30,6 +30,8 @@ export interface AgentDeps {
 const HELP =
   'Try: "start my trading session", "show my portfolio", "price of Bitcoin", "how is Ether performing", "add SOL to my watchlist", "buy 20 USDT of BTC", then "approve" or "reject". Remember things with "remember that ...".';
 
+const NO_ADVICE = 'PULSE does not give financial advice. Here are verified facts only.';
+
 const reply = (r: Partial<AgentReply> & Pick<AgentReply, 'intent' | 'response'>): AgentReply => ({
   sections: [], evidence: [], requiresClarification: false, source: 'deterministic', ...r,
 });
@@ -80,9 +82,12 @@ export class AgentService {
     if (last?.summary) sections.push({ label: 'INFO', text: `Last session: ${last.summary}` });
     if (mems.length) sections.push({ label: 'INFO', text: `I remember: ${mems.map((m) => m.content).join('; ')}` });
     const tail = last || mems.length ? 'Welcome back. ' : '';
+    // Remembered context first: the glasses show only ~6 lines, and this is what makes a returning session feel personal.
+    const remembered = sections.filter((s) => s.label === 'INFO' && /^(I remember|Last session)/.test(s.text));
+    const ordered = [...remembered, ...sections.filter((s) => !remembered.includes(s))];
     return reply({
       intent: 'START_SESSION', response: `${tail}Your session is ready. ${parts.join(' ')} What would you like to review?`.slice(0, 400),
-      sections, evidence, uiAction: { type: 'NAVIGATE', screen: 'home' }, data: { mode: this.d.mode, memoriesUsed: mems.length, preferences: prefs },
+      sections: ordered, evidence, uiAction: { type: 'NAVIGATE', screen: 'home' }, data: { mode: this.d.mode, memoriesUsed: mems.length, preferences: prefs },
     });
   }
 
@@ -342,18 +347,22 @@ export class AgentService {
     if (this.d.ai.name !== 'deterministic') {
       try {
         const r = await this.d.ai.generateInsight({ question: req.text, asset: p.asset, context });
-        return this.fromAi(userId, req.sessionId, intent === 'UNKNOWN' ? 'ASK_FINANCIAL_QUESTION' : intent, r, symbols);
+        // An opinion request can never turn into a trade, whatever the model suggests.
+        const safe = p.advice ? { ...r, action: undefined } : r;
+        const answer = await this.fromAi(userId, req.sessionId, intent === 'UNKNOWN' ? 'ASK_FINANCIAL_QUESTION' : intent, safe, symbols);
+        return p.advice ? { ...answer, sections: [{ label: 'INFO' as const, text: NO_ADVICE }, ...answer.sections] } : answer;
       } catch (err) {
         this.d.log?.warn({ err: err instanceof Error ? err.message : 'unknown' }, 'ai insight failed; using deterministic answer');
       }
     }
     // Deterministic, always-available answer: verified facts, plus an honest statement about causes.
     const facts = context.items.filter((i) => i.type === 'ticker' || i.type === 'stats' || i.type === 'portfolio').slice(0, 3);
+    if (facts.length === 0 && p.advice) return reply({ intent: 'ASK_FINANCIAL_QUESTION', response: NO_ADVICE, sections: [{ label: 'INFO', text: NO_ADVICE }] });
     if (facts.length === 0) return reply({ intent: 'UNKNOWN', response: `I did not catch that. ${HELP}`, sections: [{ label: 'INFO', text: HELP }] });
     const cause = 'I cannot verify why it moved: no news or event data source is connected.';
     return reply({
       intent: 'ASK_FINANCIAL_QUESTION', response: `${facts.map((f) => f.text).join(' ')} ${cause}`.slice(0, 400),
-      sections: [...facts.map((f) => ({ label: 'FACT' as const, text: f.text })), { label: 'UNVERIFIED', text: cause }],
+      sections: [...(p.advice ? [{ label: 'INFO' as const, text: NO_ADVICE }] : []), ...facts.map((f) => ({ label: 'FACT' as const, text: f.text })), { label: 'UNVERIFIED', text: cause }],
       evidence: facts.map((f) => ({ type: f.type, reference: f.ref, ...(f.value ? { value: f.value } : {}), ...(f.timestamp ? { timestamp: f.timestamp } : {}) })),
       data: { memoriesUsed: context.memories.length },
     });

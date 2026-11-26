@@ -35,12 +35,38 @@ Node 22.13+ or 24 (developed on 24.15), npm, Git. A free [Neon](https://neon.com
 
 ```powershell
 npm install
-Copy-Item apps/api/.env.example apps/api/.env      # fill it in (see below)
+# create apps/api/.env from the template below, then:
 npm run db:migrate                                  # creates the 14 tables in Neon
 npm run db:check                                    # one query against Neon
 ```
 
-`apps/api/.env` (git-ignored; never commit it):
+Create `apps/api/.env` (git-ignored; never commit it) and fill in the blank values:
+
+```
+NODE_ENV=development
+HOST=0.0.0.0
+API_PORT=8787
+API_BASE_URL=http://localhost:8787
+LOG_LEVEL=info
+CORS_ORIGIN=http://localhost:5173
+
+DATABASE_URL=
+DATABASE_DIRECT_URL=
+
+BINANCE_ENV=testnet
+BINANCE_TESTNET_REST_URL=https://testnet.binance.vision/api
+BINANCE_TESTNET_STREAM_URL=wss://stream.testnet.binance.vision/stream
+BINANCE_API_KEY=
+BINANCE_API_SECRET=
+
+SESSION_SECRET=
+SESSION_TTL_MINUTES=120
+PAIRING_CODE=
+
+PROPOSAL_TTL_SECONDS=120
+PRICE_MOVE_TOLERANCE_PERCENT=1
+DEMO_MODE=false
+```
 
 | Variable | Notes |
 |---|---|
@@ -52,7 +78,30 @@ npm run db:check                                    # one query against Neon
 | `AI_PROVIDER`, `AI_API_KEY`, `AI_MODEL` | Optional. `anthropic` or `openai`; blank = deterministic |
 | `STT_PROVIDER`, `STT_API_KEY` | Optional. `openai` (Whisper-compatible); blank = type instead of speak |
 
-For a zero-typing simulator: copy `apps/glasses/.env.development.example` to `apps/glasses/.env.development.local` and set `VITE_DEMO_PAIRING_CODE` to your `PAIRING_CODE` (dev server only; never included in a build).
+For a zero-typing simulator, create `apps/glasses/.env.development.local` (git-ignored; dev server only, never included in a build) with:
+
+```
+VITE_API_URL=http://localhost:8787
+VITE_DEMO_PAIRING_CODE=<the same value as PAIRING_CODE>
+```
+
+## Optional: LLM and voice (speech-to-text)
+
+PULSE works without either (deterministic parser, typed input). To switch them on, add to `apps/api/.env` (never to chat, git or the frontend), then restart `npm run dev` (`.env` is read at start-up) and run `npm run ai:check`:
+
+```
+# One OpenAI key powers both (the cheapest current models, Nov 2026):
+AI_PROVIDER=openai
+AI_API_KEY=<your key>
+AI_MODEL=gpt-6-luna
+STT_PROVIDER=openai
+STT_MODEL=gpt-transcribe
+# STT_API_KEY may stay blank: the AI key is reused
+# Anthropic instead for the LLM: AI_PROVIDER=anthropic, AI_API_KEY=<key>, AI_MODEL=<model id>
+# OpenAI-compatible server: AI_BASE_URL=https://.../v1   (STT_BASE_URL likewise)
+```
+
+`npm run ai:check` makes one tiny real call per configured service and prints OK or FAILED with the reason (never the key). What a model sees: a few verified facts (e.g. a price, your portfolio total), your explicit memory notes and preferences, and your question. It never sees credentials, account ids or order history, and it cannot approve or place trades. Please ask the organisers to confirm LLM use ([HACKATHON_COMPLIANCE](docs/HACKATHON_COMPLIANCE.md)).
 
 ## Run
 
@@ -60,6 +109,7 @@ For a zero-typing simulator: copy `apps/glasses/.env.development.example` to `ap
 npm run dev            # API on :8787 and the glasses dev server on :5173
 npm run simulator      # Even Hub simulator pointed at :5173 (second terminal)
 npm run simulator:auto # same, with the headless control API on :9898 (screenshots/input)
+npm run demo           # simulator + scripted demo autopilot with an on-screen teleprompter (for recording the video)
 ```
 
 Open <http://localhost:5173> in a normal browser to use the companion panel with an in-memory adapter (no simulator needed).
@@ -74,7 +124,9 @@ Open <http://localhost:5173> in a normal browser to use the companion panel with
 | `npm test` | unit + database-backed safety/journey tests (needs Neon; uses a fake exchange) |
 | `npm run test:integration` | live Binance **Testnet** + Neon tests, including real small testnet orders through the approval flow |
 | `npm run db:generate` / `db:migrate` / `db:studio` / `db:check` | Drizzle Kit and a Neon check |
+| `npm run ai:check` | Verify the optional LLM / speech keys with one small call each |
 | `npm run simulator` / `simulator:auto` | Even Hub simulator |
+| `npm run demo` / `demo:fast` | Simulator + demo autopilot (see [DEMO_SCRIPT](docs/DEMO_SCRIPT.md)); places one small testnet order |
 | `npm run pack:ehpk` | build + `evenhub pack` -> `pulse.ehpk` |
 
 ## Safety
@@ -83,7 +135,7 @@ Testnet only (any other URL refuses to start). No withdrawals, deposits, futures
 
 ## Known limitations
 
-- Verified in the Even Hub simulator only; no physical G2 was available. Microphone audio and real LLM/STT providers are implemented but depend on keys/hardware.
+- Verified in the Even Hub simulator only; no physical G2 was available. LLM (OpenAI `gpt-6-luna`) and speech-to-text (`gpt-transcribe`) were verified live on 2026-11-26 with synthesised speech; a live voice through the simulator or glasses microphone is still to be tried.
 - Neon is ~250 ms per query from some regions; host the API next to the Neon region for a snappy demo ([ARCHITECTURE](docs/ARCHITECTURE.md)).
 - `app.json` whitelists `http://localhost:8787` for the simulator; a real-device build needs a public HTTPS backend origin.
 - `binance.com` / `developers.binance.com` may be unreachable on some networks; only `testnet.binance.vision` is needed.

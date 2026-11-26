@@ -1,4 +1,4 @@
-import { and, desc, eq, isNull, or, gt } from 'drizzle-orm';
+import { and, desc, eq, isNull, or, gt, sql } from 'drizzle-orm';
 import type { Memory } from '@pulse/shared';
 import type { Db } from '../../db/client';
 import { userMemories, userPreferences } from '../../db/schema';
@@ -49,6 +49,13 @@ export class MemoryService {
     // Never store anything credential-shaped in conversational memory.
     if (/(api[ _-]?key|secret|password|private key|seed phrase|token)\b/i.test(content)) {
       throw new AppError(422, 'MEMORY_REJECTED', 'For your safety, PULSE does not store keys, passwords or secrets.');
+    }
+    // Saying the same thing twice must not create duplicates (also keeps repeated demo runs clean).
+    const [dup] = await this.db.select().from(userMemories)
+      .where(and(eq(userMemories.userId, userId), eq(userMemories.category, input.category), sql`lower(${userMemories.content}) = ${content.toLowerCase()}`)).limit(1);
+    if (dup) {
+      const [touched] = await this.db.update(userMemories).set({ updatedAt: this.now(), content }).where(eq(userMemories.id, dup.id)).returning();
+      return toMemoryDto(touched!);
     }
     const [row] = await this.db.insert(userMemories).values({
       userId, category: input.category, content, source: input.source ?? 'user_explicit',

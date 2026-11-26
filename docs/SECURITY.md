@@ -12,7 +12,7 @@
 
 ## Credentials and secrets
 
-- Binance keys live only in `apps/api/.env` (git-ignored; `.env.*` ignored except `.env.example`). Never in the frontend bundle, prompts, logs, memory or audit rows.
+- Binance keys live only in `apps/api/.env` (git-ignored; every `.env` and `.env.*` file is ignored). Never in the frontend bundle, prompts, logs, memory or audit rows.
 - `SESSION_SECRET` (>= 32 chars) HMACs session tokens; only hashes are stored.
 - Logs (Pino) redact `authorization`, `x-mbx-apikey`, `cookie`, `idempotency-key`; audit metadata redacts any key matching secret/signature/token/authorization/api key/password/cookie/pairing; Binance request signatures are never logged; error responses never include driver text.
 - Memory refuses to store anything that looks like a key, password, token or seed phrase.
@@ -35,5 +35,6 @@ Model input is a bounded context of verified facts; memory notes and user text a
 - Demo pairing and a single shared testnet credential (above).
 - The in-process auth cache means a revoked token can survive up to 15 s on *another* server instance (single instance today).
 - `Idempotency-Key` records are kept 24 h.
-- Microphone audio and real LLM/STT providers are implemented but untested without keys/hardware.
+- LLM (OpenAI `gpt-6-luna`) and speech-to-text (`gpt-transcribe`) were verified live on 2026-11-26 with synthesised speech; a live human voice through the simulator or G2 microphone is still untested. Voice audio is sent to the speech provider only for the utterance being processed and is not stored by PULSE.
+- With an LLM enabled, every user-visible line of its answer may only contain numbers present in the verified context; opinion requests ("should I buy?") can never become a trade.
 - The Even whitelist/CORS behaviour on a physical device is untested (no glasses available).

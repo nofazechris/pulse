@@ -308,6 +308,15 @@ describe.skipIf(!HAS_DB)('acceptance journeys', () => {
       expect(after.body.data.find((m: any) => m.id === first.id)).toBeUndefined();
     });
 
+    it('saying the same thing twice keeps one memory (repeatable demos)', async () => {
+      const u = await h.createUser();
+      const sid = await h.startSession(u);
+      await say(u, sid, 'remember that I focus on BTC and ETH');
+      await say(u, sid, 'Remember that I focus on btc and eth');
+      const mems = await h.call<any>(u, 'GET', '/memory');
+      expect(mems.body.data.filter((m: any) => /focus on/i.test(m.content))).toHaveLength(1);
+    });
+
     it('a stated preferred quote currency changes how assets resolve', async () => {
       h.fake.prices.set('BTCUSDC', '60000.00');
       const u = await h.createUser();

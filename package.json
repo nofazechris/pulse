@@ -26,7 +26,10 @@
     "db:studio": "npm run db:studio -w @pulse/api",
     "db:check": "npm run db:check -w @pulse/api",
     "pack:ehpk": "npm run build && evenhub pack apps/glasses/app.json apps/glasses/dist -o pulse.ehpk",
-    "db:latency": "npm run db:latency -w @pulse/api"
+    "db:latency": "npm run db:latency -w @pulse/api",
+    "demo": "evenhub-simulator \"http://localhost:5173/?autorun=1&countdown=5\"",
+    "demo:fast": "evenhub-simulator \"http://localhost:5173/?autorun=1&countdown=5&pace=fast\"",
+    "ai:check": "npm run ai:check -w @pulse/api"
   },
   "devDependencies": {
     "@evenrealities/evenhub-cli": "0.2.0",

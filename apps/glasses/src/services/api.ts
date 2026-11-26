@@ -119,6 +119,7 @@ export class ApiClient {
     this.request(executeResultSchema, 'POST', `/trades/proposals/${id}/execute`, { headers: { 'idempotency-key': idempotencyKey }, timeoutMs: 60_000 });
   proposal = (id: string): Promise<TradeProposal> => this.request(tradeProposalSchema, 'GET', `/trades/proposals/${id}`);
 
+  demoReset = () => this.request(z.object({ proposalsClosed: z.number(), sessionsRemoved: z.number(), watchlistReset: z.boolean() }), 'POST', '/demo/reset');
   diagnostics = (): Promise<Diagnostics> => this.request(diagnosticsSchema, 'GET', '/diagnostics');
   memories = (): Promise<Memory[]> => this.request(z.array(memorySchema), 'GET', '/memory');
   deleteMemory = (id: string) => this.request(z.object({ deleted: z.boolean() }), 'DELETE', `/memory/${id}`);

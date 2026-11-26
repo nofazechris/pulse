@@ -158,13 +158,13 @@ export class PulseController {
     }
   }
 
-  private async beginSession(): Promise<void> {
+  private async beginSession(showGreeting = false): Promise<void> {
     try {
       const { session, greeting } = await this.o.api.startSession();
       const mode = (greeting.data as { mode?: string } | undefined)?.mode === 'DEMO' ? 'DEMO' : 'LIVE';
       this.set({ activeSessionId: session.id, lastReply: greeting, mode, connectionStatus: 'connected' });
       await this.loadHome();
-      this.set({ currentScreen: 'home' });
+      this.set({ currentScreen: showGreeting ? 'insight' : 'home', scroll: 0 });
       this.note('session started');
     } catch (err) {
       this.fail(err);
@@ -530,8 +530,9 @@ export class PulseController {
     this.set({ activeSessionId: null });
   }
 
-  async newSession(): Promise<void> {
-    await this.beginSession();
+  /** `showGreeting`: land on the greeting (with remembered context) instead of Home. */
+  async newSession(showGreeting = false): Promise<void> {
+    await this.beginSession(showGreeting);
   }
 
   async loadMemories(): Promise<Memory[]> {

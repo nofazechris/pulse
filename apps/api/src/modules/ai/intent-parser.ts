@@ -12,6 +12,8 @@ export interface ParsedParams {
   quantity?: string; // amount in base asset
   price?: string;
   detail?: 'biggest';
+  /** The user asked for an opinion ("should I buy...?"): answer with facts only, never prepare a trade. */
+  advice?: boolean;
   memory?: { category: 'explicit_preference' | 'financial_goal' | 'interaction_preference'; content: string; preference?: { key: string; value: string } };
   missing?: Array<'asset' | 'amount' | 'side'>;
 }
@@ -37,7 +39,57 @@ export function normalizeText(raw: string): string {
     .replace(/(\d),(\d{3})/g, '$1$2')
     .replace(/[^a-z0-9$.%@\s'-]/g, ' ')
     .replace(/\s+/g, ' ')
-    .trim();
+    .trim()
+    .replace(/[\s.]+$/, ''); // transcribers add a full stop: "Approve." must still mean approve
+}
+
+const SMALL: Readonly<Record<string, number>> = {
+  zero: 0, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12,
+  thirteen: 13, fourteen: 14, fifteen: 15, sixteen: 16, seventeen: 17, eighteen: 18, nineteen: 19, twenty: 20, thirty: 30,
+  forty: 40, fifty: 50, sixty: 60, seventy: 70, eighty: 80, ninety: 90,
+};
+
+/**
+ * "fifty dollar" -> "50 dollar", "a hundred and twenty five" -> "125", "zero point five" -> "0.5".
+ * Words that do not form one well-shaped number are left separate rather than guessed at.
+ */
+export function spokenNumbers(t: string): string {
+  const w = t.split(/[ ]+/).flatMap((x) => (/^[a-z]+-[a-z]+$/.test(x) && x.split('-').every((p) => p in SMALL) ? x.split('-') : [x]));
+  const out: string[] = [];
+  let i = 0;
+  while (i < w.length) {
+    let total = 0;
+    let current = 0;
+    let used = 0;
+    let j = i;
+    if (w[j] === 'a' && (w[j + 1] === 'hundred' || w[j + 1] === 'thousand')) j++;
+    const article = j > i;
+    while (j < w.length) {
+      const x = w[j]!;
+      const v = SMALL[x];
+      if (v !== undefined) {
+        const fits = used === 0 || (current === 0 && total > 0) || (current % 100 === 0 && current > 0) || (current % 100 >= 20 && current % 10 === 0 && v > 0 && v < 10);
+        if (!fits) break;
+        current += v;
+      } else if (x === 'hundred' && (used > 0 || article) && current < 100) current = (current || 1) * 100;
+      else if (x === 'thousand' && (used > 0 || article) && total === 0) { total = (current || 1) * 1000; current = 0; }
+      else if (x === 'and' && used > 0 && SMALL[w[j + 1] ?? ''] !== undefined && (current % 100 === 0)) { j++; continue; }
+      else break;
+      used++;
+      j++;
+    }
+    if (used === 0) { out.push(w[i]!); i++; continue; }
+    let n = String(total + current);
+    if (w[j] === 'point') {
+      let k = j + 1;
+      let frac = '';
+      while (k < w.length && SMALL[w[k]!] !== undefined && SMALL[w[k]!]! < 10) frac += SMALL[w[k++]!];
+      if (frac) { n += `.${frac}`; j = k; }
+    }
+    out.push(n);
+    i = j;
+  }
+  return out.join(' ');
 }
 
 function findAssets(t: string): string[] {
@@ -55,7 +107,8 @@ function pickAsset(t: string): string | undefined {
   return all.find((a) => a !== 'USDT' && a !== 'USDC') ?? all[0];
 }
 
-function parseTrade(t: string): ParsedIntent | null {
+function parseTrade(spoken: string): ParsedIntent | null {
+  const t = spokenNumbers(spoken);
   const side = /\b(buy|purchase|long)\b/.test(t) ? 'BUY' : /\bsell\b/.test(t) ? 'SELL' : undefined;
   if (!side) return null;
   const asset = pickAsset(t);
@@ -129,6 +182,11 @@ export function parseIntent(raw: string): ParsedIntent {
 
   const mem = parseMemory(t, raw);
   if (mem) return mem;
+
+  // Asking for an opinion is never an instruction to trade.
+  if (/^(should (i|we)|is (it|now) (a )?(good|bad|the right|worth)|is it worth|do you think|would you (buy|sell)|what if i|when should)\b/.test(t)) {
+    return ok('ASK_FINANCIAL_QUESTION', { ...(asset ? { asset } : {}), advice: true });
+  }
 
   const trade = parseTrade(t);
   if (trade) return trade;

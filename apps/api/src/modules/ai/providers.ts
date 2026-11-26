@@ -85,15 +85,18 @@ class OpenAIProvider extends BaseJsonProvider {
     super();
   }
   protected complete: Complete = async (system, user) => {
-    const res = await fetch(`${this.baseUrl}/chat/completions`, {
+    // No sampling parameters: several current models reject temperature=0. Safety comes from output validation.
+    const send = (jsonMode: boolean) => fetch(`${this.baseUrl}/chat/completions`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${this.key}` },
       body: JSON.stringify({
-        model: this.model, temperature: 0, response_format: { type: 'json_object' },
+        model: this.model, ...(jsonMode ? { response_format: { type: 'json_object' } } : {}),
         messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
       }),
       signal: AbortSignal.timeout(15_000),
     });
+    let res = await send(true);
+    if (res.status === 400) res = await send(false); // a model or compatible server without JSON mode
     if (!res.ok) throw new AIProviderError(`Provider HTTP ${res.status}`);
     const body = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> };
     return body.choices?.[0]?.message?.content ?? '';
@@ -134,7 +137,7 @@ export function createAIProvider(env: Pick<Env, 'AI_PROVIDER' | 'AI_API_KEY' | '
     return new AnthropicProvider(env.AI_API_KEY, env.AI_MODEL ?? 'claude-haiku-5-5', env.AI_BASE_URL ?? 'https://api.anthropic.com');
   }
   if (env.AI_PROVIDER === 'openai' && env.AI_API_KEY) {
-    return new OpenAIProvider(env.AI_API_KEY, env.AI_MODEL ?? 'gpt-4o-mini', env.AI_BASE_URL ?? 'https://api.openai.com/v1');
+    return new OpenAIProvider(env.AI_API_KEY, env.AI_MODEL ?? 'gpt-6-luna', env.AI_BASE_URL ?? 'https://api.openai.com/v1');
   }
   return new DeterministicProvider();
 }

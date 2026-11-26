@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { dec, type MarketStats } from '@pulse/shared';
 import { parseEnv } from '../src/config/env';
-import { parseIntent, extractMemory } from '../src/modules/ai/intent-parser';
+import { parseIntent, extractMemory, spokenNumbers } from '../src/modules/ai/intent-parser';
 import { validateAiIntent, validateAiResponse, extractJson } from '../src/modules/ai/validate';
 import { pcmToWav } from '../src/modules/ai/stt';
 import { BinanceClient, ALLOWED_ENDPOINTS } from '../src/modules/exchange/binance-client';
@@ -231,6 +231,38 @@ describe('intent parsing', () => {
     expect(parseIntent(text).intent).toBe(intent);
   });
 
+  it('understands what a transcriber actually returns: trailing punctuation and spoken numbers', () => {
+    expect(parseIntent('Approve.').intent).toBe('APPROVE_TRADE');
+    expect(parseIntent('Yes, approve it.').intent).toBe('APPROVE_TRADE');
+    expect(parseIntent('Reject.').intent).toBe('REJECT_TRADE');
+    expect(parseIntent('Cancel this proposal.').intent).toBe('REJECT_TRADE');
+    expect(parseIntent('End my session.').intent).toBe('END_SESSION');
+    expect(parseIntent('My preferred quote currency is USDC.').params.memory?.preference?.value).toBe('USDC');
+    expect(parseIntent('Prepare a fifty dollar Bitcoin buy.').params).toMatchObject({ asset: 'BTC', side: 'BUY', quote: '50' });
+    expect(parseIntent('Buy twenty five dollars of ether').params.quote).toBe('25');
+    expect(parseIntent('buy a hundred and twenty USDT of solana').params.quote).toBe('120');
+    expect(parseIntent('buy two thousand five hundred usdt of btc').params.quote).toBe('2500');
+    expect(parseIntent('sell zero point zero zero one bitcoin').params.quantity).toBe('0.001');
+    expect(parseIntent('buy one bitcoin').params.quantity).toBe('1');
+    expect(parseIntent('Prepare a $50 BTC buy.').params.quote).toBe('50');
+  });
+
+  it('never guesses a number from words that do not form one, and punctuation never creates an approval', () => {
+    expect(spokenNumbers('five fifty')).toBe('5 50'); // ambiguous: stays two numbers
+    expect(spokenNumbers('buy a bitcoin')).toBe('buy a bitcoin');
+    for (const t of ['Maybe approve later.', 'Do not approve.', 'Approve all future trades.']) expect(parseIntent(t).intent, t).not.toBe('APPROVE_TRADE');
+  });
+
+  it('treats a request for an opinion as a question, never as a trade', () => {
+    for (const t of ['Should I buy bitcoin?', 'should we sell 20 dollars of eth', 'Do you think I should buy BTC?', 'Is it a good time to buy bitcoin?', 'would you sell solana']) {
+      const p = parseIntent(t);
+      expect(p.intent, t).toBe('ASK_FINANCIAL_QUESTION');
+      expect(p.params.advice).toBe(true);
+    }
+    expect(parseIntent('buy 20 usdt of btc').intent).toBe('PREPARE_TRADE');
+    expect(parseIntent('can you buy 20 usdt of btc').intent).toBe('PREPARE_TRADE'); // a polite instruction still prepares (and still needs approval)
+  });
+
   it('extracts trade parameters', () => {
     expect(parseIntent('Prepare a $50 BTC buy').params).toMatchObject({ asset: 'BTC', side: 'BUY', quote: '50', orderType: 'MARKET' });
     expect(parseIntent('Buy 20 USDT of Bitcoin').params).toMatchObject({ asset: 'BTC', side: 'BUY', quote: '20' });
@@ -268,12 +300,27 @@ describe('AI output validation (grounding + safety)', () => {
     expect(validateAiResponse('text', ctx)).toBeNull();
     expect(validateAiResponse({ ...good, response: '' }, ctx)).toBeNull();
   });
+  it('fills evidence values from verified data, ignoring long or invented ones from the model, and tolerates nulls', () => {
+    const rich = { items: [{ ...ctx.items[0]!, value: '59980', timestamp: '2026-11-26T00:00:00Z' }], memories: [], preferences: {} };
+    const r = validateAiResponse({ ...good, interpretation: null, action: null, evidence: [{ type: 'made-up', reference: 'ticker:BTCUSDT', value: 'x'.repeat(200), timestamp: 'yesterday' }] }, rich);
+    expect(r?.evidence).toEqual([{ type: 'ticker', reference: 'ticker:BTCUSDT', value: '59980', timestamp: '2026-11-26T00:00:00Z' }]);
+  });
+  it('accepts a bracketed reference but never an unknown one', () => {
+    expect(validateAiResponse({ ...good, evidence: [{ reference: '[ticker:BTCUSDT]' }] }, ctx)?.evidence[0]?.reference).toBe('ticker:BTCUSDT');
+    expect(validateAiResponse({ ...good, evidence: [{ reference: '[ticker:FAKEUSDT]' }] }, ctx)).toBeNull();
+  });
   it('rejects evidence the backend never supplied', () => {
     expect(validateAiResponse({ ...good, evidence: [{ type: 'ticker', reference: 'ticker:FAKEUSDT' }] }, ctx)).toBeNull();
   });
   it('rejects facts without evidence and invented numbers', () => {
     expect(validateAiResponse({ ...good, evidence: [] }, ctx)).toBeNull();
     expect(validateAiResponse({ ...good, facts: ['BTC is 99,999.00'] }, ctx)).toBeNull();
+  });
+  it('rejects invented numbers anywhere the wearer can read them, not only in facts', () => {
+    expect(validateAiResponse({ ...good, response: 'BTC will reach 75,000 soon.' }, ctx)).toBeNull();
+    expect(validateAiResponse({ ...good, interpretation: 'Support sits near 55,500.' }, ctx)).toBeNull();
+    expect(validateAiResponse({ ...good, unverified: 'Volume may be up 35 percent.' }, ctx)).toBeNull();
+    expect(validateAiResponse({ ...good, interpretation: 'The price of 59,980.00 is the only data point.' }, ctx)).not.toBeNull();
   });
   it('never lets a model approve or reject a trade', () => {
     expect(validateAiIntent({ intent: 'APPROVE_TRADE', params: {}, confidence: 1 })).toMatchObject({ intent: 'UNKNOWN' });

@@ -42,6 +42,7 @@ const envSchema = z
     AI_BASE_URL: optional,
     STT_PROVIDER: optional.pipe(z.enum(['none', 'openai']).optional()),
     STT_API_KEY: optional,
+    STT_MODEL: optional,
     STT_BASE_URL: optional,
 
     SESSION_SECRET: optional,

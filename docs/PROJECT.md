@@ -151,7 +151,7 @@ The 2 s price cache could hide a price jump just before execution (proposals and
 ## Not verified / limits (read these)
 
 - **No physical G2.** Everything above is simulator + automated tests. The Even app whitelist/CORS on a device is untested.
-- **STT and LLM providers are implemented but untested** (no keys supplied): speech-to-text ends at "not configured -> type instead"; the AI provider path (Anthropic / OpenAI-compatible) is covered only by validation tests and mocks. The deterministic fallback is what ran.
+- **LLM and speech-to-text: live-verified 2026-11-26** (OpenAI `gpt-6-luna` + `gpt-transcribe`, the cheapest current models per OpenAI's pricing page). 8 synthesised spoken commands were transcribed through `/agent/transcribe` (~1 s each) and acted on; grounded AI answers took ~3-5 s; injection-style requests produced no approval and no order. Fixed along the way: spoken "Approve." (trailing full stop), spoken numbers ("fifty dollar"), "should I buy...?" treated as a trade, model evidence values rejected for length, bracketed references, and the invented-number check extended to every visible line. **Still not tested:** a person speaking into the simulator/G2 microphone with live speech-to-text.
 - WebSocket market stream (PRD 8.8) is **not built**: REST polling only.
 - Auth is demo-grade pairing with one shared testnet credential ([SECURITY](SECURITY.md)); `exchange_connections` is unused.
 - Sell-side and limit orders are covered by tests; voice cancel of an exchange order is intentionally not supported (HTTP only).

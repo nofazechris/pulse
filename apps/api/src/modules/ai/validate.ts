@@ -20,22 +20,31 @@ export function extractJson(text: string): unknown {
  * A model can never approve a trade or mark an order successful: those fields do not exist in the schema.
  */
 export function validateAiResponse(raw: unknown, context: AIContext): AIResponse | null {
-  const parsed = aiResponseSchema.safeParse(raw);
+  // Models often send `null` for fields they leave out; treat that as absent.
+  const cleaned = raw && typeof raw === 'object' && !Array.isArray(raw) ? Object.fromEntries(Object.entries(raw).filter(([, v]) => v !== null)) : raw;
+  const parsed = aiResponseSchema.safeParse(cleaned);
   if (!parsed.success) return null;
   const r = parsed.data;
-  const refs = new Set(context.items.map((i) => i.ref));
-  if (r.evidence.some((e) => !refs.has(e.reference))) return null;
+  const byRef = new Map(context.items.map((i) => [i.ref, i]));
+  // Models sometimes copy the "[ref]" brackets used in the prompt; the reference itself must still match exactly.
+  const refs = r.evidence.map((e) => e.reference.trim().replace(/^\[|\]$/g, ''));
+  if (refs.some((ref) => !byRef.has(ref))) return null;
+  // Evidence shown to the user comes from OUR data, never from the model's copy of it.
+  const evidence = [...new Set(refs)].map((ref) => {
+    const i = byRef.get(ref)!;
+    return { type: i.type, reference: ref, ...(i.value !== undefined ? { value: i.value } : {}), ...(i.timestamp ? { timestamp: i.timestamp } : {}) };
+  });
   if (r.facts.length > 0 && r.evidence.length === 0) return null;
-  // Facts must only quote numbers that exist in the supplied context.
-  const allowed = context.items.map((i) => i.text).join(' ');
+  // EVERY line the wearer can read may only quote numbers that exist in the supplied context.
+  const allowed = context.items.map((i) => i.text).join(' ').replace(/,/g, '');
   const numbersIn = (s: string) => s.match(/\d[\d,]*\.?\d*/g) ?? [];
-  for (const f of r.facts) {
-    for (const n of numbersIn(f)) {
+  for (const text of [r.response, ...r.facts, r.interpretation ?? '', r.unverified ?? '']) {
+    for (const n of numbersIn(text)) {
       const clean = n.replace(/,/g, '').replace(/\.$/, '');
-      if (clean.length >= 2 && !allowed.replace(/,/g, '').includes(clean)) return null;
+      if (clean.length >= 2 && !allowed.includes(clean)) return null;
     }
   }
-  return r;
+  return { ...r, evidence };
 }
 
 const FORBIDDEN_FROM_MODEL: ReadonlySet<Intent> = new Set(['APPROVE_TRADE', 'REJECT_TRADE']);

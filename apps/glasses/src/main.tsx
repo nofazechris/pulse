@@ -6,6 +6,7 @@ import type { GlassesAdapter } from './sdk/types';
 import { ApiClient } from './services/api';
 import { createTokenStore } from './services/tokenStore';
 import { PulseController } from './state/controller';
+import { createControllerDriver } from './demo/driver';
 import './styles.css';
 
 const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8787';
@@ -31,7 +32,7 @@ async function boot() {
   const controller = new PulseController({
     adapter, api, tokens, autoPairCode: AUTO_PAIR, deviceType: adapter.kind === 'even-hub' ? 'simulator' : 'web',
   });
-  createRoot(document.getElementById('root')!).render(<App controller={controller} api={api} apiUrl={API_URL} adapterKind={adapter.kind} bridgeNote={bridgeNote} />);
+  createRoot(document.getElementById('root')!).render(<App controller={controller} api={api} apiUrl={API_URL} adapterKind={adapter.kind} bridgeNote={bridgeNote} driver={createControllerDriver(controller, api)} />);
   await controller.start();
 }
 

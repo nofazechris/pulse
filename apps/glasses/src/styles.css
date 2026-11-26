@@ -71,3 +71,8 @@ button:disabled { opacity: 0.4; cursor: default; }
 ul { padding-left: 18px; margin: 0; }
 li { margin: 4px 0; }
 .panel { max-width: 640px; }
+
+.demo { border: 2px solid var(--fg); padding: 10px 14px; margin: 12px 0; }
+.demo .big { font-size: 22px; margin: 4px 0; letter-spacing: 0.05em; }
+.demo .say { font-size: 20px; margin: 8px 0; color: var(--fg); }
+.demo .narr { font-size: 16px; line-height: 1.5; color: var(--dim); margin: 4px 0 0; }
