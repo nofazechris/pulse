@@ -10,7 +10,7 @@ Deadline: **Sunday Nov 29, 2026, 23:59 Dubai** = **20:59 UTC+1** (the page's own
 | Demo video, up to 3 minutes, simulator or G2 | Yes | `demo-video/pulse-demo.mp4` (2:56); upload and paste the link |
 | Short description: problem, who it is for, how it works, track | Yes | Below |
 | Feature requests (up to 5) | Optional | Below |
-| Packaged `.ehpk` | Optional | Built: `pulse.ehpk` in the project folder; rebuild with `npm run pack:ehpk` |
+| Packaged `.ehpk` | Optional | Download: <https://github.com/nofazechris/pulse/raw/main/release/pulse.ehpk> (rebuild with `npm run pack:ehpk`) |
 | "How did you hear about this hackathon?" | Form field | Name the community that sent you, if one did |
 
 `.ehpk` note: no hosted server is needed. Opened without one, the app offers a **practice mode** (double-tap on the first screen) with sample data and simulated orders, labelled DEMO. Real Binance Testnet data needs the server from the repository.

@@ -20,6 +20,8 @@ Screens are captured from the Even Hub simulator (576 x 288).
 
 ## Try it in two minutes: no server, no keys
 
+**Packaged app:** [`release/pulse.ehpk`](https://github.com/nofazechris/pulse/raw/main/release/pulse.ehpk) (opens in practice mode when no server is running).
+
 ```powershell
 npm install
 npm run dev:glasses    # first terminal
