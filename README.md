@@ -1,7 +1,9 @@
 # PULSE
 
 **Your financial world, at a glance.** A voice-first trading copilot for Even Realities G2 smart glasses.
-Heads Up: Even Realities Hackathon 2026, track **Exchanges & Stocks** (Binance), currently running on **Binance Spot Testnet**. The demo video is attached to the DoraHacks submission.
+Heads Up: Even Realities Hackathon 2026, track **Exchanges & Stocks** (Binance), currently running on **Binance Spot Testnet**. 
+
+**[Watch the demo video](https://www.youtube.com/watch?v=B5mK4iPqPEI)** (2:56)
 
 **The problem.** Checking a position or acting on a price move means pulling out a phone, and "trading by voice" is dangerous without guardrails.
 **For whom.** Active traders who want a glance, a short phrase and one confirming tap.
